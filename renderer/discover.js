@@ -52,8 +52,13 @@ async function performSearch(offset, getProfilesData) {
 
     try {
         const source = document.getElementById('search-source')?.value || 'all';
+        const selectedProfile = document.getElementById('play-profile-select').value;
+        let installedMods = [];
+        if (selectedProfile) {
+            installedMods = await window.electronAPI.getInstalledMods(selectedProfile);
+        }
         const data = await searchAll(query, facets, LIMIT, offset, source);
-        renderResults(data, getProfilesData);
+        renderResults(data, getProfilesData, installedMods);
     } catch (e) {
         grid.innerHTML = `
             <div class="empty-state" style="grid-column: 1 / -1;">
@@ -66,7 +71,7 @@ async function performSearch(offset, getProfilesData) {
     }
 }
 
-function renderResults(data, getProfilesData) {
+function renderResults(data, getProfilesData, installedMods = []) {
     const grid = document.getElementById('discover-grid');
     grid.innerHTML = '';
 
@@ -110,6 +115,8 @@ function renderResults(data, getProfilesData) {
             compatHint = `<span style="color:var(--color-text-med); font-size:12px;">Kein Profil gewählt</span>`;
         }
 
+        const isInstalled = installedMods.some(m => m.toLowerCase().includes(mod.slug.toLowerCase()) || m.toLowerCase().includes(mod.title.toLowerCase().replace(/ /g, '-')));
+
         const iconUrl = mod.icon_url || 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23242424"><rect width="24" height="24"/></svg>';
         const downloads = (mod.downloads / 1000000 >= 1) ? (mod.downloads / 1000000).toFixed(1) + 'M' : 
                           (mod.downloads / 1000 >= 1) ? (mod.downloads / 1000).toFixed(1) + 'K' : mod.downloads;
@@ -137,7 +144,9 @@ function renderResults(data, getProfilesData) {
 
             <div style="display:flex; justify-content:space-between; align-items:center; margin-top:auto;">
                 ${compatHint}
-                <button class="btn btn-secondary btn-install" data-slug="${mod.slug}">Installieren</button>
+                <button class="btn btn-secondary btn-install" data-slug="${mod.slug}" ${isInstalled ? 'disabled' : ''}>
+                    ${isInstalled ? 'INSTALLED' : 'Installieren'}
+                </button>
             </div>
         `;
 
