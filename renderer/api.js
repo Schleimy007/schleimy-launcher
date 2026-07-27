@@ -277,3 +277,22 @@ export async function resolveAllDependencies(modVersionData, loader, mcVersion) 
     return toDownload;
 }
 
+export async function getModDescription(slug, source = 'modrinth', cfId = null) {
+    try {
+        if (source === 'curseforge' && cfId) {
+            const res = await fetch(`${CF_API}/mods/${cfId}/description`, {
+                headers: { 'x-api-key': CF_API_KEY, 'Accept': 'application/json' }
+            });
+            if (!res.ok) return 'Keine Beschreibung verfügbar.';
+            const data = await res.json();
+            return data.data || 'Keine Beschreibung verfügbar.';
+        } else {
+            const res = await fetch(`${MODRINTH_API}/project/${slug}`);
+            if (!res.ok) return 'Keine Beschreibung verfügbar.';
+            const data = await res.json();
+            return data.body || data.description || 'Keine Beschreibung verfügbar.';
+        }
+    } catch (e) {
+        return 'Fehler beim Laden der Beschreibung.';
+    }
+}

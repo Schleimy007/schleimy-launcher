@@ -106,20 +106,11 @@ async function refreshInstallStates() {
                             if (res.success) {
                                 showToast('Update', `${upd.projectName} aktualisiert!`, 'success');
                                 newBtn.textContent = 'Installiert';
-                                newBtn.disabled = true;
-                                newBtn.style.background = '';
-                                newBtn.style.color = '';
-                                newBtn.style.fontWeight = '';
-                            } else {
-                                showToast('Fehler', res.error, 'error');
-                                newBtn.disabled = false;
-                                newBtn.textContent = 'Update';
-                            }
-                        });
+                        btn.textContent = 'Update';
                     }
                 });
-            }
-        } catch (_) {}
+            } catch (_) {}
+        }
     }
 }
 
@@ -185,6 +176,7 @@ function renderResults(data, getProfilesData, installedMods = []) {
         const card = document.createElement('div');
         card.className = 'card';
         card.style.animationDelay = `${(index % LIMIT) * 20}ms`;
+        card.style.cursor = 'pointer';
 
         // Check compatibility
         let isCompatible = true;
@@ -206,7 +198,7 @@ function renderResults(data, getProfilesData, installedMods = []) {
 
         const isInstalled = installedMods.some(m => {
             const fn = (m.filename || m).toLowerCase();
-            return fn.includes(mod.slug.toLowerCase());
+            return fn.includes(mod.slug.toLowerCase().replace('cf:', ''));
         });
 
         const iconUrl = mod.icon_url || 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23242424"><rect width="24" height="24"/></svg>';
@@ -243,11 +235,91 @@ function renderResults(data, getProfilesData, installedMods = []) {
         `;
 
         const btn = card.querySelector('.btn-install');
-        btn.addEventListener('click', () => handleInstallClick(mod.slug, mod.project_type, getProfilesData, btn));
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            handleInstallClick(mod.slug, mod.project_type, getProfilesData, btn);
+        });
+
+        card.addEventListener('click', () => {
+            openModDetailModal(mod, isInstalled, !profileData || isCompatible, getProfilesData, btn, downloads);
+        });
+
         grid.appendChild(card);
     });
 
     renderPagination(data.total_hits, getProfilesData);
+}
+
+async function openModDetailModal(mod, isInstalled, isCompatible, getProfilesData, origBtn, formattedDownloads) {
+    modDetailImg.src = mod.icon_url || 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23242424"><rect width="24" height="24"/></svg>';
+    
+    let typeName = 'MOD';
+    if(mod.project_type === 'modpack') typeName = 'MODPACK';
+    else if(mod.project_type === 'resourcepack') typeName = 'RESOURCE PACK';
+    else if(mod.project_type === 'shader') typeName = 'SHADER';
+    
+    modDetailType.textContent = typeName;
+    modDetailTitle.textContent = mod.title;
+    modDetailDownloads.textContent = formattedDownloads;
+    modDetailDate.textContent = mod.date_modified ? new Date(mod.date_modified).toLocaleDateString() : '-';
+    
+    btnModDetailInstall.disabled = (isInstalled || !isCompatible);
+    btnModDetailInstall.innerHTML = isInstalled 
+        ? '<svg viewBox="0 0 24 24" style="width: 16px; height: 16px; margin-right: 8px; vertical-align: text-bottom; display: inline-block;"><path d="M20 6L9 17l-5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Installiert'
+        : (!isCompatible ? 'Inkompatibel' : '<svg viewBox="0 0 24 24" style="width: 16px; height: 16px; margin-right: 8px; vertical-align: text-bottom; display: inline-block;"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Installieren');
+
+    if(origBtn.textContent === 'Update') {
+        btnModDetailInstall.disabled = false;
+        btnModDetailInstall.textContent = 'Update';
+        btnModDetailInstall.style.backgroundColor = '#10B981';
+        btnModDetailInstall.style.borderColor = '#10B981';
+    } else {
+        btnModDetailInstall.style.backgroundColor = '';
+        btnModDetailInstall.style.borderColor = '';
+    }
+
+    const browserUrl = mod._source === 'curseforge' 
+        ? `https://www.curseforge.com/minecraft/mc-mods/${mod._cfId}` 
+        : `https://modrinth.com/${mod.project_type}/${mod.slug}`;
+    
+    btnModDetailView.href = browserUrl;
+
+    // Load Description
+    modDetailDesc.innerHTML = '<div class="skeleton" style="height:20px; width:60%; margin-bottom:10px;"></div><div class="skeleton" style="height:20px; width:40%;"></div>';
+    
+    modDetailModal.classList.add('active');
+
+    const desc = await getModDescription(mod.slug.replace('cf:', ''), mod._source, mod._cfId);
+    
+    // Parse Markdown (very basic)
+    const mdToHtml = (md) => {
+        if(!md) return '';
+        let html = md;
+        html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
+        html = html.replace(/^## (.*$)/gim, '<h2>$1</h2>');
+        html = html.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+        html = html.replace(/^\> (.*$)/gim, '<blockquote>$1</blockquote>');
+        html = html.replace(/\*\*(.*)\*\*/gim, '<b>$1</b>');
+        html = html.replace(/\*(.*)\*/gim, '<i>$1</i>');
+        html = html.replace(/!\[(.*?)\]\((.*?)\)/gim, "<img alt='$1' src='$2' />");
+        html = html.replace(/\[(.*?)\]\((.*?)\)/gim, "<a href='$2'>$1</a>");
+        html = html.replace(/\n$/gim, '<br />');
+        return html;
+    };
+    
+    // If it looks like HTML, don't parse as markdown
+    if(desc.includes('<p>') || desc.includes('<h1>') || desc.includes('<div>')) {
+        modDetailDesc.innerHTML = desc;
+    } else {
+        modDetailDesc.innerHTML = mdToHtml(desc);
+    }
+
+    // Install Button Handler
+    btnModDetailInstall.onclick = () => {
+        handleInstallClick(mod.slug, mod.project_type, getProfilesData, origBtn);
+        btnModDetailInstall.innerHTML = '<svg viewBox="0 0 24 24" style="width: 16px; height: 16px; margin-right: 8px; vertical-align: text-bottom; display: inline-block; animation: spin 1s linear infinite;"><path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Lädt...';
+        btnModDetailInstall.disabled = true;
+    };
 }
 
 function renderPagination(totalHits, getProfilesData) {

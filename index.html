@@ -404,6 +404,54 @@
         </div>
     </div>
 
+    <!-- Modal: Mod Details (Discover Tab) -->
+    <div id="modal-mod-detail" class="modal-overlay">
+        <div class="modal-content" style="max-width: 900px; padding: 0; overflow: hidden; background: var(--color-bg-dark); border-radius: 24px; box-shadow: 0 20px 50px rgba(0,0,0,0.5); display: flex; flex-direction: column;">
+            <div style="display: grid; grid-template-columns: 280px 1fr; min-height: 500px; height: 100%;">
+                <!-- Left Sidebar -->
+                <div style="background: var(--color-bg-panel); padding: 32px; border-right: 1px solid var(--color-border); display: flex; flex-direction: column; align-items: center; text-align: center;">
+                    <button class="btn btn-icon btn-secondary" id="btn-mod-detail-close" style="align-self: flex-start; margin-bottom: 24px;">
+                        <svg viewBox="0 0 24 24" style="width: 20px; height: 20px;"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z" fill="currentColor"/></svg>
+                    </button>
+                    <div style="width: 160px; height: 160px; background: var(--color-bg-dark); border-radius: 20px; display: flex; justify-content: center; align-items: center; margin-bottom: 24px; border: 1px solid var(--color-border); padding: 20px;">
+                        <img id="mod-detail-img" src="" alt="Mod Icon" style="max-width: 100%; max-height: 100%; object-fit: contain;">
+                    </div>
+                    <span id="mod-detail-type" style="display: inline-block; padding: 6px 14px; background: rgba(16, 185, 129, 0.15); border: 1px solid var(--color-primary); color: var(--color-primary); border-radius: 50px; font-size: 12px; font-weight: 800; text-transform: uppercase; margin-bottom: 16px;">MOD</span>
+                    <h2 id="mod-detail-title" style="margin-bottom: 24px; font-size: 24px; line-height: 1.2;">Mod Name</h2>
+                    
+                    <div style="width: 100%; text-align: left; margin-bottom: 24px; padding-top: 24px; border-top: 1px solid var(--color-border);">
+                        <div style="margin-bottom: 16px;">
+                            <div style="font-size: 12px; color: var(--color-text-med); text-transform: uppercase; font-weight: 800;">Downloads</div>
+                            <div id="mod-detail-downloads" style="font-size: 20px; font-weight: bold; color: var(--color-primary);">0</div>
+                        </div>
+                        <div>
+                            <div style="font-size: 12px; color: var(--color-text-med); text-transform: uppercase; font-weight: 800;">Zuletzt aktualisiert</div>
+                            <div id="mod-detail-date" style="font-size: 20px; font-weight: bold; color: var(--color-primary);">01.01.2026</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Right Content -->
+                <div style="padding: 40px; display: flex; flex-direction: column; max-height: 80vh; overflow-y: auto;">
+                    <div style="display: flex; gap: 12px; margin-bottom: 32px; flex-wrap: wrap;">
+                        <button id="btn-mod-detail-install" class="btn btn-primary" style="padding: 12px 24px; font-size: 15px; font-weight: bold;">
+                            <svg viewBox="0 0 24 24" style="width: 16px; height: 16px; margin-right: 8px; vertical-align: text-bottom; display: inline-block;"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                            Installieren
+                        </button>
+                        <a id="btn-mod-detail-view" href="#" target="_blank" class="btn btn-secondary" style="padding: 12px 24px; font-size: 15px; font-weight: bold; text-decoration: none; display: inline-flex; align-items: center; gap: 8px;">
+                            <svg viewBox="0 0 24 24" style="width: 16px; height: 16px;"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                            Im Browser öffnen
+                        </a>
+                    </div>
+                    
+                    <div id="mod-detail-desc" style="color: var(--color-text-med); font-size: 15px; line-height: 1.6; word-break: break-word;">
+                        Loading...
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Toast Container -->
     <div id="toast-container"></div>
 
