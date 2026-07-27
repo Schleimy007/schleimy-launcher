@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <title>Minecraft Live-Log</title>
+    <style>
+        body { 
+            margin: 0; padding: 0; background-color: #0d0d12; color: #cccccc; 
+            font-family: 'Consolas', 'Courier New', monospace; overflow-y: auto; font-size: 13px; 
+        }
+        .header {
+            position: sticky; top: 0; background: rgba(13, 13, 18, 0.9); backdrop-filter: blur(5px);
+            padding: 8px 16px; border-bottom: 1px solid #222; display: flex; justify-content: space-between; align-items: center;
+        }
+        .title { color: #fff; font-weight: bold; font-family: 'Inter', sans-serif; }
+        .controls { display: flex; gap: 10px; font-family: 'Inter', sans-serif; font-size: 12px; }
+        .controls label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+        #log-container { padding: 10px 16px; white-space: pre-wrap; word-wrap: break-word; }
+        .log-info { color: #cccccc; }
+        .log-warn { color: #f59e0b; }
+        .log-error { color: #ef4444; }
+        .log-debug { color: #3b82f6; }
+        .log-fatal { color: #ef4444; font-weight: bold; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #0d0d12; }
+        ::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #555; }
+    </style>
+</head>
+<body>
+    <!-- Custom Titlebar -->
+    <div class="header" style="-webkit-app-region: drag;">
+        <div class="title" style="padding-left:16px;">Live Console</div>
+        <div class="controls" style="-webkit-app-region: no-drag; display:flex; align-items:center;">
+            <label style="margin-right:16px; color:#ccc;"><input type="checkbox" id="auto-scroll" checked> Auto-Scroll</label>
+            <button id="win-close" style="width: 46px; height: 38px; background: transparent; border: none; color: #9CA3AF; cursor: pointer; display: flex; justify-content: center; align-items: center;"><svg viewBox="0 0 10 10" style="width:10px;height:10px;"><path d="M2 2l6 6M8 2L2 8" stroke="currentColor" stroke-width="1.5"/></svg></button>
+        </div>
+    </div>
+    <style>
+        #win-close:hover { background: #e81123 !important; color: #fff !important; }
+    </style>
+    <div id="log-container"></div>
+    <script>
+        const container = document.getElementById('log-container');
+        const autoScrollCb = document.getElementById('auto-scroll');
+        
+        let userScrolled = false;
+        
+        window.addEventListener('scroll', () => {
+            const atBottom = window.innerHeight + window.scrollY >= document.body.offsetHeight - 30;
+            if (atBottom) {
+                userScrolled = false;
+                autoScrollCb.checked = true;
+            } else {
+                userScrolled = true;
+                autoScrollCb.checked = false;
+            }
+        });
+        
+        autoScrollCb.addEventListener('change', (e) => {
+            userScrolled = !e.target.checked;
+            if (e.target.checked) window.scrollTo(0, document.body.scrollHeight);
+        });
+
+        window.electronAPI.onLauncherEvent((evt) => {
+            if (evt.type === 'game-log') {
+                const line = evt.data.raw;
+                if (!line.trim()) return;
+
+                const div = document.createElement('div');
+                
+                let cssClass = 'log-info';
+                const upLine = line.toUpperCase();
+                if (upLine.includes('FATAL')) cssClass = 'log-fatal';
+                else if (upLine.includes('ERROR') || upLine.includes('EXCEPTION')) cssClass = 'log-error';
+                else if (upLine.includes('WARN')) cssClass = 'log-warn';
+                else if (upLine.includes('DEBUG')) cssClass = 'log-debug';
+
+                div.className = cssClass;
+                
+                // Optional: colorize time brackets [HH:MM:SS]
+                const formattedLine = line.replace(/^(\[.*?\])(.*)/, (match, time, rest) => {
+                    return `<span style="color:#555;">${time}</span>${rest.replace(/</g, '&lt;').replace(/>/g, '&gt;')}`;
+                });
+                
+                if (formattedLine !== line) {
+                    div.innerHTML = formattedLine;
+                } else {
+                    div.textContent = line;
+                }
+                
+                container.appendChild(div);
+
+                if (!userScrolled) {
+                    window.scrollTo(0, document.body.scrollHeight);
+                }
+            }
+        });
+        
+        document.getElementById('win-close').addEventListener('click', async () => {
+            await window.electronAPI.windowClose();
+        });
+    </script>
+</body>
+</html>
