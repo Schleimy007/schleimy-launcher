@@ -600,7 +600,7 @@ function ensureLauncherListeners() {
         
         // P2P Log Parsing
         if (pendingHostType) {
-            const match = msg.match(/Local game hosted on port (\d+)/i) || msg.match(/Started on port (\d+)/i);
+            const match = msg.match(/Local game hosted on port \[?(\d+)\]?/i) || msg.match(/Started on port \[?(\d+)\]?/i);
             if (match && match[1]) {
                 const lanPort = parseInt(match[1], 10);
                 startP2PHost(lanPort, pendingHostType, pendingHostProfileData);
