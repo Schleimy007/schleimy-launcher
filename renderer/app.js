@@ -21,42 +21,47 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 async function loadInitialData() {
-    // 1. Auth Status
-    const auth = await window.electronAPI.getAuth();
-    updateAuthUI(auth);
+    try {
+        // 1. Auth Status
+        const auth = await window.electronAPI.getAuth();
+        updateAuthUI(auth);
 
-    // 2. Settings & Memory
-    const settings = await window.electronAPI.getSettings();
-    sysMemoryGB = await window.electronAPI.getSystemMemory();
-    
-    const ramSlider = document.getElementById('setting-ram');
-    ramSlider.max = sysMemoryGB;
-    ramSlider.value = settings.ram || 4;
-    document.getElementById('setting-ram-val').textContent = `${ramSlider.value} GB`;
-    document.getElementById('sys-ram').textContent = sysMemoryGB;
-    
-    if (settings.javaPath) document.getElementById('setting-java').value = settings.javaPath;
+        // 2. Settings & Memory
+        const settings = await window.electronAPI.getSettings();
+        sysMemoryGB = await window.electronAPI.getSystemMemory();
+        
+        const ramSlider = document.getElementById('setting-ram');
+        ramSlider.max = sysMemoryGB;
+        ramSlider.value = settings.ram || 4;
+        document.getElementById('setting-ram-val').textContent = `${ramSlider.value} GB`;
+        document.getElementById('sys-ram').textContent = sysMemoryGB;
+        
+        if (settings.javaPath) document.getElementById('setting-java').value = settings.javaPath;
 
-    // 3. Profiles & Minecraft Versions
-    await loadProfiles();
-    
-    const mcVersions = await fetchMojangVersions();
-    populateVersionSelects(mcVersions);
+        // 3. Profiles & Minecraft Versions
+        await loadProfiles();
+        
+        const mcVersions = await fetchMojangVersions();
+        populateVersionSelects(mcVersions);
 
-    // 4. Init Discover logic
-    initDiscover(getProfilesData);
-    // Trigger initial search
-    document.getElementById('search-input').dispatchEvent(new Event('input'));
-    
-    // 5. Setup Wizard & Splash Screen
-    if (!settings.setupCompleted) {
-        document.getElementById('startup-loader').style.display = 'none';
-        document.getElementById('setup-wizard').style.display = 'flex';
-        initSetupWizard();
-    } else {
-        const loader = document.getElementById('startup-loader');
-        loader.style.opacity = '0';
-        setTimeout(() => loader.style.display = 'none', 500);
+        // 4. Init Discover logic
+        initDiscover(getProfilesData);
+        // Trigger initial search
+        document.getElementById('search-input').dispatchEvent(new Event('input'));
+        
+        // 5. Setup Wizard & Splash Screen
+        if (!settings.setupCompleted) {
+            document.getElementById('startup-loader').style.display = 'none';
+            document.getElementById('setup-wizard').style.display = 'flex';
+            initSetupWizard();
+        } else {
+            const loader = document.getElementById('startup-loader');
+            loader.style.opacity = '0';
+            setTimeout(() => loader.style.display = 'none', 500);
+        }
+    } catch (e) {
+        document.getElementById('startup-loader').innerHTML = `<div style="padding:20px;color:red;word-wrap:break-word;">Startup Error: ${e.message}<br>${e.stack}</div>`;
+        console.error(e);
     }
 }
 

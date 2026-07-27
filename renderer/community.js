@@ -41,33 +41,7 @@ export function initCommunityTab() {
     });
 }
 
-function renderPublicServer(server) {
-    const list = document.getElementById('community-servers-list');
-    const emptyState = list.querySelector('.empty-state');
-    if (emptyState) emptyState.remove();
 
-    const card = document.createElement('div');
-    card.className = 'card';
-    card.style.display = 'flex';
-    card.style.justifyContent = 'space-between';
-    card.style.alignItems = 'center';
-    
-    const modText = server.mods && server.mods.length > 0 ? `${server.mods.length} Mods` : 'Vanilla';
-    
-    card.innerHTML = `
-        <div>
-            <h3 style="margin:0 0 4px 0;">${server.name}</h3>
-            <div class="mod-meta">
-                <span class="badge loader-${server.loader || 'fabric'}">${server.loader || 'Fabric'}</span>
-                <span class="badge">${server.mcVersion || '1.20.1'}</span>
-                <span class="badge" style="background:var(--color-surface);">${modText}</span>
-            </div>
-            <div style="font-size:12px; color:var(--color-text-med); margin-top:4px;">Host: ${server.host}</div>
-        </div>
-        <button class="btn btn-primary" onclick="joinServer('${server.code}')">Beitreten</button>
-    `;
-    list.appendChild(card);
-}
 
 async function refreshPublicServers() {
     const list = document.getElementById('community-servers-list');
