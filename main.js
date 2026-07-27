@@ -746,8 +746,30 @@ ipcMain.on('start-minecraft', async (_e, options) => {
                 }
             } catch(e) { console.error(e); }
         } else if (options.loader === 'neoforge') {
-            sendEvent('progress', 'NeoForge wird gestartet...');
-            // Note: NeoForge relies on user-installed versions via custom config
+            sendEvent('progress', 'NeoForge wird konfiguriert...');
+            const match = options.version.match(/^1\.(\d+)(?:\.(\d+))?/);
+            if (match) {
+                const prefix = `${match[1]}.${match[2] || '0'}.`;
+                const njp = path.join(profilePath, `neoforge-installer-${options.version}.jar`);
+                if (!fs.existsSync(njp)) {
+                    sendEvent('progress', 'Suche neueste NeoForge Version...');
+                    try {
+                        const pr = await fetch('https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml');
+                        if (pr.ok) {
+                            const xml = await pr.text();
+                            const versions = [...xml.matchAll(/<version>(.+?)<\/version>/g)].map(m => m[1]);
+                            const valid = versions.filter(v => v.startsWith(prefix));
+                            if (valid.length > 0) {
+                                const nv = valid[valid.length - 1];
+                                sendEvent('progress', `Lade NeoForge ${nv}...`);
+                                const r = await fetch(`https://maven.neoforged.net/releases/net/neoforged/neoforge/${nv}/neoforge-${nv}-installer.jar`);
+                                if (r.ok) fs.writeFileSync(njp, Buffer.from(await r.arrayBuffer()));
+                            }
+                        }
+                    } catch (e) { console.error(e); }
+                }
+                if (fs.existsSync(njp)) opts.forge = njp;
+            }
         }
         gameStartTime = Date.now();
         updateDiscordRPC('Spielt Minecraft', `Profil: ${options.profileName}`, gameStartTime);
