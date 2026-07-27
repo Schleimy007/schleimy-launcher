@@ -42,7 +42,7 @@
       "target": [
         "nsis"
       ],
-      "icon": "build/icon.ico"
+      "icon": "build/logo.png"
     },
     "nsis": {
       "oneClick": false,
@@ -52,13 +52,13 @@
       "target": [
         "dmg"
       ],
-      "icon": "build/icon.icns"
+      "icon": "build/logo.png"
     },
     "linux": {
       "target": [
         "AppImage"
       ],
-      "icon": "build/icon.png"
+      "icon": "build/logo.png"
     },
     "publish": [
       {

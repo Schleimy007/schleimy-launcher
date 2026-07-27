@@ -149,7 +149,8 @@ function createWindow() {
         width: 1380, height: 900, minWidth: 940, minHeight: 620,
         webPreferences: { nodeIntegration: false, contextIsolation: true, preload: path.join(__dirname, 'preload.js') },
         autoHideMenuBar: true, backgroundColor: '#111111', show: false,
-        frame: false
+        frame: false,
+        icon: path.join(__dirname, 'build', 'logo.png')
     });
     mainWindow.loadFile('index.html');
     mainWindow.once('ready-to-show', () => mainWindow.show());
