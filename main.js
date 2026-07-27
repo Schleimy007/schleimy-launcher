@@ -656,7 +656,9 @@ function startP2PHost(lanPort, type, profileData) {
 
     hostSwarm.on('connection', (conn, info) => {
         // When a peer connects, send them server info
-        const serverInfo = { type: 'server-info', name: `${os.userInfo().username}'s Welt`, host: os.userInfo().username, mods: modsList, loader: profileData?.loader, mcVersion: profileData?.version };
+        const auth = loadAuthToken();
+        const hostName = (auth && auth.name) ? auth.name : os.userInfo().username;
+        const serverInfo = { type: 'server-info', name: `${hostName}'s Welt`, host: hostName, mods: modsList, loader: profileData?.loader, mcVersion: profileData?.version };
         conn.write(JSON.stringify(serverInfo) + '\n');
         
         // Wait for 'JOIN' command
