@@ -56,7 +56,7 @@ function loadSettings() {
     const defaults = { setupCompleted: false, ram: 4, javaPath: '', showSnapshots: false, theme: 'jade', accentColor: '#00AF5C', jvmPreset: 'default', discordRPC: true, parallelDownloads: 4 };
     return { ...defaults, ...loadJSON(settingsPath, {}) };
 }
-function saveSettingsFile(settings) { saveJSON(settingsPath, settings); }
+function saveSettingsFile(settings) { const current = loadSettings(); saveJSON(settingsPath, { ...current, ...settings }); }
 function loadAccounts() { return loadJSON(accountsPath, []); }
 function saveAccounts(accounts) { saveJSON(accountsPath, accounts); }
 function loadServers() { return loadJSON(serversPath, []); }
