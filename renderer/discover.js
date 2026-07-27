@@ -147,8 +147,8 @@ function renderResults(data, getProfilesData, installedMods = []) {
 
             <div style="display:flex; justify-content:space-between; align-items:center; margin-top:auto;">
                 ${compatHint}
-                <button class="btn btn-secondary btn-install" data-slug="${mod.slug}" ${isInstalled ? 'disabled' : ''}>
-                    ${isInstalled ? 'INSTALLED' : 'Installieren'}
+                <button class="btn btn-secondary btn-install" data-slug="${mod.slug}" ${(isInstalled || (profileData && !isCompatible)) ? 'disabled' : ''}>
+                    ${isInstalled ? 'INSTALLED' : (profileData && !isCompatible ? 'Inkompatibel' : 'Installieren')}
                 </button>
             </div>
         `;
