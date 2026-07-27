@@ -31,53 +31,97 @@ export function initCommunityTab() {
     document.querySelector('[data-tab="community"]').addEventListener('click', () => {
         refreshPublicServers();
     });
+    // Listen for dynamically found servers
+    window.addEventListener('public-server-found', (e) => {
+        const server = e.detail;
+        if (!publicServers.find(s => s.code === server.code)) {
+            publicServers.push(server);
+            renderPublicServer(server);
+        }
+    });
+}
+
+function renderPublicServer(server) {
+    const list = document.getElementById('community-servers-list');
+    const emptyState = list.querySelector('.empty-state');
+    if (emptyState) emptyState.remove();
+
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.style.display = 'flex';
+    card.style.justifyContent = 'space-between';
+    card.style.alignItems = 'center';
+    
+    const modText = server.mods && server.mods.length > 0 ? `${server.mods.length} Mods` : 'Vanilla';
+    
+    card.innerHTML = `
+        <div>
+            <h3 style="margin:0 0 4px 0;">${server.name}</h3>
+            <div class="mod-meta">
+                <span class="badge loader-${server.loader || 'fabric'}">${server.loader || 'Fabric'}</span>
+                <span class="badge">${server.mcVersion || '1.20.1'}</span>
+                <span class="badge" style="background:var(--color-surface);">${modText}</span>
+            </div>
+            <div style="font-size:12px; color:var(--color-text-med); margin-top:4px;">Host: ${server.host}</div>
+        </div>
+        <button class="btn btn-primary" onclick="joinServer('${server.code}')">Beitreten</button>
+    `;
+    list.appendChild(card);
 }
 
 async function refreshPublicServers() {
     const list = document.getElementById('community-servers-list');
-    list.innerHTML = '<div style="color:var(--color-text-med); text-align:center; padding: 24px;">Suche Server im P2P-Netzwerk... (kann 5-10s dauern)</div>';
+    list.innerHTML = '<div class="empty-state" style="color:var(--color-text-med); text-align:center; padding: 24px;">Suche Server im P2P-Netzwerk... (kann bis zu 15s dauern)</div>';
     
-    publicServers = await window.electronAPI.p2pFetchPublic();
+    publicServers = [];
+    
+    // Will dynamically append via renderPublicServer as they arrive
+    await window.electronAPI.p2pFetchPublic();
     
     if (publicServers.length === 0) {
         list.innerHTML = '<div class="empty-state">Keine öffentlichen Welten gefunden.</div>';
-        return;
+    } else {
+        const emptyState = list.querySelector('.empty-state');
+        if (emptyState) emptyState.remove();
     }
+}
+
+function renderPublicServer(server) {
+    const list = document.getElementById('community-servers-list');
+    const emptyState = list.querySelector('.empty-state');
+    if (emptyState) emptyState.remove();
+
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.style.display = 'flex';
+    card.style.justifyContent = 'space-between';
+    card.style.alignItems = 'center';
     
-    list.innerHTML = '';
-    publicServers.forEach(server => {
-        const card = document.createElement('div');
-        card.className = 'card';
-        card.style.display = 'flex';
-        card.style.justifyContent = 'space-between';
-        card.style.alignItems = 'center';
-        
-        const modText = server.mods && server.mods.length > 0 ? `${server.mods.length} Mods` : 'Vanilla';
-        
-        card.innerHTML = `
-            <div>
-                <h3 style="margin:0 0 4px 0;">${server.name}</h3>
-                <div class="mod-meta">
-                    <span class="badge" style="background:var(--color-bg-dark);">${server.host}</span>
-                    <span class="badge">${server.mcVersion}</span>
-                    <span class="badge">${server.loader}</span>
-                    <span class="badge">${modText}</span>
-                </div>
+    const modText = server.mods && server.mods.length > 0 ? `${server.mods.length} Mods` : 'Vanilla';
+    
+    card.innerHTML = `
+        <div>
+            <h3 style="margin:0 0 4px 0;">${server.name}</h3>
+            <div class="mod-meta">
+                <span class="badge" style="background:var(--color-bg-dark);">${server.host}</span>
+                <span class="badge">${server.mcVersion}</span>
+                <span class="badge">${server.loader}</span>
+                <span class="badge">${modText}</span>
             </div>
-            <button class="btn btn-primary btn-join-public" data-code="${server.code}">Beitreten</button>
-        `;
-        
-        card.querySelector('.btn-join-public').addEventListener('click', async (e) => {
-            const btn = e.target;
-            btn.disabled = true;
-            btn.textContent = 'Verbinde...';
-            await joinServer(server.code, server);
-            btn.disabled = false;
-            btn.textContent = 'Beitreten';
-        });
-        
-        list.appendChild(card);
+        </div>
+        <button class="btn btn-primary btn-join-public" data-code="${server.code}">Beitreten</button>
+    `;
+    
+    card.querySelector('.btn-join-public').addEventListener('click', async (e) => {
+        const btn = e.target;
+        btn.disabled = true;
+        btn.textContent = 'Verbinde...';
+        await joinServer(server.code, server);
+        btn.disabled = false;
+        btn.textContent = 'Beitreten';
     });
+    
+    list.appendChild(card);
 }
 
 async function joinServer(code, preloadedInfo = null) {

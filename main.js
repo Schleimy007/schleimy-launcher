@@ -168,27 +168,23 @@ function createWindow() {
 
 ipcMain.handle('p2p-fetch-public', async () => {
     return new Promise((resolve) => {
-        const tempSwarm = new Hyperswarm();
         const servers = [];
-        let timer = setTimeout(() => {
-            tempSwarm.destroy();
-            resolve(servers);
-        }, 5000);
-
-        tempSwarm.on('connection', (conn) => {
-            let buffer = '';
+        const tempSwarm = new Hyperswarm();
+        tempSwarm.on('error', () => {}); // Prevent crash
+        tempSwarm.on('connection', (conn, info) => {
             conn.on('data', data => {
-                buffer += data.toString();
-                if (buffer.includes('\n')) {
-                    try {
-                        const info = JSON.parse(buffer.split('\n')[0]);
-                        if (info.type === 'server-info') servers.push({ ...info, code: crypto.createHash('sha256').update(conn.remotePublicKey).digest('hex').substring(0,6) }); // Wait, public topic peers don't use short codes.
-                    } catch(e) {}
-                    conn.destroy();
-                }
+                try {
+                    const infoObj = JSON.parse(data.toString());
+                    if (infoObj.type === 'server-info') {
+                        const srv = { ...infoObj, code: crypto.createHash('sha256').update(conn.remotePublicKey).digest('hex').substring(0,6) };
+                        servers.push(srv);
+                        sendEvent('public-server-found', 'Server gefunden', srv);
+                    }
+                } catch(e) {}
             });
         });
         tempSwarm.join(PUBLIC_SERVERS_TOPIC, { server: false, client: true });
+        setTimeout(() => { tempSwarm.destroy(); resolve(servers); }, 15000);
     });
 });
 
@@ -565,7 +561,9 @@ ipcMain.handle('check-mod-updates', async (_e, { profileName, loader, mcVersion 
 });
 ipcMain.handle('update-mod', async (_e, { profileName, currentFile, downloadUrl, newFilename }) => {
     const mp = path.join(instancesDir, profileName, 'mods');
-    try { const res = await fetch(downloadUrl); if (!res.ok) throw new Error(`HTTP ${res.status}`); fs.writeFileSync(path.join(mp, newFilename), Buffer.from(await res.arrayBuffer())); const old = path.join(mp, currentFile); if (fs.existsSync(old) && currentFile !== newFilename) fs.unlinkSync(old); return { success: true }; }
+    try { 
+        if (!fs.existsSync(mp)) fs.mkdirSync(mp, { recursive: true });
+        const res = await fetch(downloadUrl); if (!res.ok) throw new Error(`HTTP ${res.status}`); fs.writeFileSync(path.join(mp, newFilename), Buffer.from(await res.arrayBuffer())); const old = path.join(mp, currentFile); if (fs.existsSync(old) && currentFile !== newFilename) fs.unlinkSync(old); return { success: true }; }
     catch (e) { return { success: false, error: e.message }; }
 });
 
@@ -727,6 +725,29 @@ ipcMain.on('start-minecraft', async (_e, options) => {
             const fjp = path.join(profilePath, `forge-installer-${options.version}.jar`);
             if (!fs.existsSync(fjp)) { const pr = await fetch('https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json'); const promos = await pr.json(); let fv = promos.promos[`${options.version}-latest`] || promos.promos[`${options.version}-recommended`]; if (fv) { sendEvent('progress', `Lade Forge ${fv}...`); const r = await fetch(`https://maven.minecraftforge.net/net/minecraftforge/forge/${options.version}-${fv}/forge-${options.version}-${fv}-installer.jar`); if (r.ok) fs.writeFileSync(fjp, Buffer.from(await r.arrayBuffer())); } }
             if (fs.existsSync(fjp)) opts.forge = fjp;
+        } else if (options.loader === 'quilt') {
+            sendEvent('progress', 'Quilt Loader wird konfiguriert...');
+            try {
+                const loadersRes = await fetch(`https://meta.quiltmc.org/v3/versions/loader/${options.version}`);
+                if (loadersRes.ok) {
+                    const loaders = await loadersRes.json();
+                    if (loaders.length > 0) {
+                        const lv = loaders[0].loader.version;
+                        const pRes = await fetch(`https://meta.quiltmc.org/v3/versions/loader/${options.version}/${lv}/profile/json`);
+                        if (pRes.ok) { 
+                            const pJson = await pRes.json(); 
+                            const cv = `quilt-loader-${lv}-${options.version}`; 
+                            const vd = path.join(profilePath, 'versions', cv); 
+                            fs.mkdirSync(vd, { recursive: true }); 
+                            fs.writeFileSync(path.join(vd, `${cv}.json`), JSON.stringify(pJson)); 
+                            opts.version.custom = cv; 
+                        }
+                    }
+                }
+            } catch(e) { console.error(e); }
+        } else if (options.loader === 'neoforge') {
+            sendEvent('progress', 'NeoForge wird gestartet...');
+            // Note: NeoForge relies on user-installed versions via custom config
         }
         gameStartTime = Date.now();
         updateDiscordRPC('Spielt Minecraft', `Profil: ${options.profileName}`, gameStartTime);
@@ -754,9 +775,18 @@ ipcMain.on('stop-minecraft', () => {
 });
 
 // Feature 7: Performance Monitor
+let lastCpus = os.cpus();
 ipcMain.handle('get-performance', () => {
     const cpus = os.cpus();
-    return { cpu: { cores: cpus.length, model: cpus[0]?.model || 'Unknown' }, memory: { total: os.totalmem(), free: os.freemem(), used: os.totalmem() - os.freemem(), processRss: process.memoryUsage().rss }, gameRunning: !!gameProcess, playTime: gameStartTime ? Math.floor((Date.now() - gameStartTime) / 1000) : 0 };
+    let user = 0, nice = 0, sys = 0, idle = 0, irq = 0;
+    for(let cpu of cpus){ user += cpu.times.user; nice += cpu.times.nice; sys += cpu.times.sys; idle += cpu.times.idle; irq += cpu.times.irq; }
+    let lastUser = 0, lastNice = 0, lastSys = 0, lastIdle = 0, lastIrq = 0;
+    for(let cpu of lastCpus){ lastUser += cpu.times.user; lastNice += cpu.times.nice; lastSys += cpu.times.sys; lastIdle += cpu.times.idle; lastIrq += cpu.times.irq; }
+    const total = (user - lastUser) + (nice - lastNice) + (sys - lastSys) + (idle - lastIdle) + (irq - lastIrq);
+    const active = (user - lastUser) + (nice - lastNice) + (sys - lastSys) + (irq - lastIrq);
+    const percent = total > 0 ? (active / total) * 100 : 0;
+    lastCpus = cpus;
+    return { cpu: percent, ram: (os.totalmem() - os.freemem()) / (1024 * 1024), gameRunning: !!gameProcess, playTime: gameStartTime ? Math.floor((Date.now() - gameStartTime) / 1000) : 0 };
 });
 
 // ===== EXTERNAL IMPORTS (SETUP WIZARD) =====

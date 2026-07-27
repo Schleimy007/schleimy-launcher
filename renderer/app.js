@@ -61,6 +61,12 @@ async function loadInitialData() {
 }
 
 async function initSetupWizard() {
+    const s = await window.electronAPI.getSettings();
+    if (!s.setupCompleted) {
+        s.setupCompleted = true;
+        await window.electronAPI.saveSettings(s);
+    }
+
     const list = document.getElementById('setup-instances-list');
     list.innerHTML = '<div style="text-align:center; padding: 20px;">Suche externe Profile...</div>';
     
@@ -286,6 +292,9 @@ function setupIpcListeners() {
         } 
         else if (evt.type === 'update-start') {
             document.getElementById('update-overlay').style.display = 'flex';
+        }
+        else if (evt.type === 'public-server-found') {
+            window.dispatchEvent(new CustomEvent('public-server-found', { detail: evt.data }));
         }
         else if (evt.type === 'update-progress') {
             document.getElementById('update-progress-bar').style.width = (evt.data?.percent || 0) + '%';
