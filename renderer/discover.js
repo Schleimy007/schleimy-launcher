@@ -148,12 +148,13 @@ function renderResults(data, getProfilesData, installedMods = []) {
             <div style="display:flex; justify-content:space-between; align-items:center; margin-top:auto;">
                 ${compatHint}
                 <button class="btn btn-secondary btn-install" data-slug="${mod.slug}" ${(isInstalled || (profileData && !isCompatible)) ? 'disabled' : ''}>
-                    ${isInstalled ? 'INSTALLED' : (profileData && !isCompatible ? 'Inkompatibel' : 'Installieren')}
+                    ${isInstalled ? 'Installiert' : (profileData && !isCompatible ? 'Inkompatibel' : 'Installieren')}
                 </button>
             </div>
         `;
 
-        card.querySelector('.btn-install').addEventListener('click', () => handleInstallClick(mod.slug, mod.project_type, getProfilesData));
+        const btn = card.querySelector('.btn-install');
+        btn.addEventListener('click', () => handleInstallClick(mod.slug, mod.project_type, getProfilesData, btn));
         grid.appendChild(card);
     });
 
@@ -192,13 +193,18 @@ function renderPagination(totalHits, getProfilesData) {
     pagination.appendChild(nextBtn);
 }
 
-async function handleInstallClick(slug, projectType, getProfilesData) {
+async function handleInstallClick(slug, projectType, getProfilesData, btnElement) {
     const selectedProfile = document.getElementById('play-profile-select').value;
     const profiles = getProfilesData();
     
     if (!selectedProfile) {
         showToast('Fehler', 'Bitte wähle unten zuerst ein Profil aus, in das installiert werden soll.', 'error');
         return;
+    }
+    
+    if (btnElement) {
+        btnElement.disabled = true;
+        btnElement.textContent = 'Lädt...';
     }
 
     const profile = profiles[selectedProfile];
@@ -224,7 +230,15 @@ async function handleInstallClick(slug, projectType, getProfilesData) {
                 targetDir: targetDir
             });
         }
+        
+        if (btnElement) {
+            btnElement.textContent = 'Installiert';
+        }
     } catch (e) {
         showToast('Installationsfehler', e.message, 'error');
+        if (btnElement) {
+            btnElement.disabled = false;
+            btnElement.textContent = 'Installieren';
+        }
     }
 }
