@@ -245,10 +245,13 @@ app.whenReady().then(() => {
     autoUpdater.checkForUpdatesAndNotify();
     
     autoUpdater.on('update-available', () => {
-        if (mainWindow) mainWindow.webContents.send('launcher-event', { type: 'progress', message: 'Update verfügbar, lade herunter...' });
+        if (mainWindow) mainWindow.webContents.send('launcher-event', { type: 'update-start' });
+    });
+    autoUpdater.on('download-progress', (progressObj) => {
+        if (mainWindow) mainWindow.webContents.send('launcher-event', { type: 'update-progress', data: { percent: progressObj.percent } });
     });
     autoUpdater.on('update-downloaded', () => {
-        if (mainWindow) mainWindow.webContents.send('launcher-event', { type: 'progress', message: 'Update bereit, installiere...' });
+        if (mainWindow) mainWindow.webContents.send('launcher-event', { type: 'update-ready' });
         setTimeout(() => autoUpdater.quitAndInstall(), 3000);
     });
     autoUpdater.on('error', (err) => {

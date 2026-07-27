@@ -28,6 +28,16 @@
         <h2 style="margin-top: 24px; font-weight: 500; letter-spacing: 1px;">INITIALISIERE...</h2>
     </div>
 
+    <!-- Update Overlay -->
+    <div id="update-overlay" class="startup-overlay" style="display: none; flex-direction: column; z-index: 9999;">
+        <div class="spinner" style="margin-bottom: 24px;"></div>
+        <h1 style="font-size: 32px; margin-bottom: 16px;">Wichtiges Update wird geladen... 🚀</h1>
+        <div style="width: 400px; height: 8px; background: var(--color-surface); border-radius: 4px; overflow: hidden; margin-bottom: 16px; border: 1px solid var(--color-border);">
+            <div id="update-progress-bar" style="width: 0%; height: 100%; background: var(--color-primary); transition: width 0.2s ease;"></div>
+        </div>
+        <p id="update-status-text" style="color: var(--color-text-med); font-size: 16px;">Bitte schließe den Launcher nicht. Das Update ist erforderlich.</p>
+    </div>
+
     <!-- Setup Wizard -->
     <div id="setup-wizard" class="startup-overlay" style="display: none; flex-direction: column; padding: 40px;">
         <h1 style="font-size: 32px; margin-bottom: 8px;">Willkommen bei Schleimy! 🚀</h1>

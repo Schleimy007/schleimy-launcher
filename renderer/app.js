@@ -284,6 +284,16 @@ function setupIpcListeners() {
             statusDisplay.textContent = evt.message;
             updateToastProgress(evt.message);
         } 
+        else if (evt.type === 'update-start') {
+            document.getElementById('update-overlay').style.display = 'flex';
+        }
+        else if (evt.type === 'update-progress') {
+            document.getElementById('update-progress-bar').style.width = (evt.data?.percent || 0) + '%';
+        }
+        else if (evt.type === 'update-ready') {
+            document.getElementById('update-progress-bar').style.width = '100%';
+            document.getElementById('update-status-text').textContent = 'Update bereit! Starte neu...';
+        }
         else if (evt.type === 'game-started') {
             statusDisplay.textContent = '🚀 Spiel läuft!';
             showToast('Spiel gestartet', 'Minecraft wird geöffnet...', 'success');
