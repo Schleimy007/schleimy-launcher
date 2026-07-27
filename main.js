@@ -195,6 +195,7 @@ ipcMain.handle('p2p-fetch-public', async () => {
 ipcMain.handle('p2p-get-info', async (_e, { code }) => {
     return new Promise((resolve) => {
         const tempSwarm = new Hyperswarm();
+        tempSwarm.on('error', () => {});
         const joinTopic = crypto.createHash('sha256').update(code).digest();
         let timer = setTimeout(() => { tempSwarm.destroy(); resolve(null); }, 8000);
         tempSwarm.on('connection', (conn) => {
@@ -214,6 +215,7 @@ ipcMain.handle('p2p-join', async (_e, { code }) => {
     if (clientSwarm) stopP2P();
     return new Promise((resolve) => {
         clientSwarm = new Hyperswarm();
+        clientSwarm.on('error', () => {});
         const joinTopic = crypto.createHash('sha256').update(code).digest();
         let connected = false;
         let timeout = setTimeout(() => { if (!connected) { stopP2P(); resolve({ success: false, error: 'Host nicht gefunden.' }); } }, 10000);
@@ -638,6 +640,7 @@ function stopP2P() {
 function startP2PHost(lanPort, type, profileData) {
     if (hostSwarm) stopP2P();
     hostSwarm = new Hyperswarm();
+    hostSwarm.on('error', () => {}); 
     activeHostCode = crypto.randomBytes(3).toString('hex').toUpperCase(); // 6 chars
     const privateTopic = crypto.createHash('sha256').update(activeHostCode).digest();
     
