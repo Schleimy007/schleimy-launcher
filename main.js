@@ -599,13 +599,12 @@ function ensureLauncherListeners() {
         if (logWindow && !logWindow.isDestroyed()) logWindow.webContents.send('launcher-event', { type: 'game-log', data: { raw: msg } }); 
         
         // P2P Log Parsing
-        if (pendingHostType) {
-            const match = msg.match(/Local game hosted on port \[?(\d+)\]?/i) || msg.match(/Started on port \[?(\d+)\]?/i);
-            if (match && match[1]) {
-                const lanPort = parseInt(match[1], 10);
-                startP2PHost(lanPort, pendingHostType, pendingHostProfileData);
-                pendingHostType = null;
-            }
+        const match = msg.match(/Local game hosted on port \[?(\d+)\]?/i) || msg.match(/Started on port \[?(\d+)\]?/i);
+        if (match && match[1]) {
+            const lanPort = parseInt(match[1], 10);
+            const pType = pendingHostType || 'private';
+            startP2PHost(lanPort, pType, pendingHostProfileData || {});
+            pendingHostType = null;
         }
     });
     launcher.on('close', (code) => { 
@@ -725,9 +724,9 @@ ipcMain.on('start-minecraft', async (_e, options) => {
         updateDiscordRPC('Spielt Minecraft', `Profil: ${options.profileName}`, gameStartTime);
         
         // P2P Setup
+        pendingHostProfileData = Object.assign({ name: options.profileName }, profileCfg);
         if (profileCfg.hostMode === 'public' || profileCfg.hostMode === 'private') {
             pendingHostType = profileCfg.hostMode;
-            pendingHostProfileData = profileCfg;
             sendEvent('progress', `Warte auf LAN-Öffnung für P2P-Host (${profileCfg.hostMode})...`);
         }
 
