@@ -799,16 +799,59 @@ ipcMain.on('stop-minecraft', () => {
 // Feature 7: Performance Monitor
 let lastCpus = os.cpus();
 ipcMain.handle('get-performance', () => {
-    const cpus = os.cpus();
-    let user = 0, nice = 0, sys = 0, idle = 0, irq = 0;
-    for(let cpu of cpus){ user += cpu.times.user; nice += cpu.times.nice; sys += cpu.times.sys; idle += cpu.times.idle; irq += cpu.times.irq; }
-    let lastUser = 0, lastNice = 0, lastSys = 0, lastIdle = 0, lastIrq = 0;
-    for(let cpu of lastCpus){ lastUser += cpu.times.user; lastNice += cpu.times.nice; lastSys += cpu.times.sys; lastIdle += cpu.times.idle; lastIrq += cpu.times.irq; }
-    const total = (user - lastUser) + (nice - lastNice) + (sys - lastSys) + (idle - lastIdle) + (irq - lastIrq);
-    const active = (user - lastUser) + (nice - lastNice) + (sys - lastSys) + (irq - lastIrq);
-    const percent = total > 0 ? (active / total) * 100 : 0;
-    lastCpus = cpus;
-    return { cpu: percent, ram: (os.totalmem() - os.freemem()) / (1024 * 1024), gameRunning: !!gameProcess, playTime: gameStartTime ? Math.floor((Date.now() - gameStartTime) / 1000) : 0 };
+    try {
+        const cpus = os.cpus();
+        let user = 0, nice = 0, sys = 0, idle = 0, irq = 0;
+        for (let cpu of cpus) {
+            if (cpu.times) {
+                user += cpu.times.user || 0;
+                nice += cpu.times.nice || 0;
+                sys += cpu.times.sys || 0;
+                idle += cpu.times.idle || 0;
+                irq += cpu.times.irq || 0;
+            }
+        }
+        
+        let lastUser = 0, lastNice = 0, lastSys = 0, lastIdle = 0, lastIrq = 0;
+        if (lastCpus && lastCpus.length > 0) {
+            for (let cpu of lastCpus) {
+                if (cpu.times) {
+                    lastUser += cpu.times.user || 0;
+                    lastNice += cpu.times.nice || 0;
+                    lastSys += cpu.times.sys || 0;
+                    lastIdle += cpu.times.idle || 0;
+                    lastIrq += cpu.times.irq || 0;
+                }
+            }
+        }
+
+        const total = (user - lastUser) + (nice - lastNice) + (sys - lastSys) + (idle - lastIdle) + (irq - lastIrq);
+        const active = (user - lastUser) + (nice - lastNice) + (sys - lastSys) + (irq - lastIrq);
+        
+        let percent = total > 0 ? (active / total) * 100 : 0;
+        if (isNaN(percent) || !isFinite(percent)) percent = 0;
+        
+        lastCpus = cpus;
+
+        const totalMem = os.totalmem();
+        const freeMem = os.freemem();
+        let ram = (totalMem - freeMem) / (1024 * 1024);
+        if (isNaN(ram) || !isFinite(ram)) ram = 0;
+
+        let pt = 0;
+        if (gameStartTime && typeof gameStartTime === 'number' && !isNaN(gameStartTime)) {
+            pt = Math.floor((Date.now() - gameStartTime) / 1000);
+        }
+
+        return { 
+            cpu: percent, 
+            ram: ram, 
+            gameRunning: !!gameProcess, 
+            playTime: pt 
+        };
+    } catch (e) {
+        return { cpu: 0, ram: 0, gameRunning: !!gameProcess, playTime: 0 };
+    }
 });
 
 // ===== EXTERNAL IMPORTS (SETUP WIZARD) =====

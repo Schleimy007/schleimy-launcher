@@ -116,6 +116,11 @@ export async function getCurseForgeModVersion(cfId, loader, mcVersion) {
 
 // ===== COMBINED SEARCH (Modrinth + CurseForge) =====
 export async function searchAll(query, facets, limit = 20, offset = 0, source = 'all') {
+    // If it's a Vanilla profile, we don't allow Mods. We ONLY allow resource packs and shaders.
+    if (facets.loader === 'vanilla' && (!facets.type || facets.type === 'mod' || facets.type === 'modpack')) {
+        return { hits: [], total_hits: 0 };
+    }
+
     if (source === 'curseforge') {
         return searchCurseForge(query, facets, limit, offset);
     }
