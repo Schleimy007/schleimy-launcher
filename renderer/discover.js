@@ -46,6 +46,8 @@ async function refreshInstallStates() {
     if (!selectedProfile) return;
     
     const installedMods = await window.electronAPI.getInstalledMods(selectedProfile);
+    const profiles = lastGetProfilesData ? lastGetProfilesData() : {};
+    const profileData = profiles[selectedProfile];
     const buttons = document.querySelectorAll('#discover-grid .btn-install');
     
     buttons.forEach(btn => {
@@ -68,6 +70,57 @@ async function refreshInstallStates() {
             btn.disabled = false;
         }
     });
+    
+    // Check for updates on installed mods and turn 'Installiert' into green 'Update' buttons
+    if (profileData) {
+        try {
+            const updates = await window.electronAPI.checkModUpdates({ profileName: selectedProfile, loader: profileData.loader, mcVersion: profileData.version });
+            if (updates && updates.length > 0) {
+                buttons.forEach(btn => {
+                    const slug = btn.dataset.slug;
+                    if (!slug || btn.textContent.trim() !== 'Installiert') return;
+                    
+                    const hasUpdate = updates.some(u => {
+                        const pName = (u.projectName || '').toLowerCase();
+                        return pName.includes(slug.toLowerCase()) || slug.toLowerCase().includes(pName.replace(/ /g, '-'));
+                    });
+                    
+                    if (hasUpdate) {
+                        const upd = updates.find(u => {
+                            const pName = (u.projectName || '').toLowerCase();
+                            return pName.includes(slug.toLowerCase()) || slug.toLowerCase().includes(pName.replace(/ /g, '-'));
+                        });
+                        btn.textContent = 'Update';
+                        btn.disabled = false;
+                        btn.style.background = 'var(--color-success)';
+                        btn.style.color = '#111';
+                        btn.style.fontWeight = '700';
+                        btn.title = `${upd.currentVersion} → ${upd.latestVersion}`;
+                        // Replace click handler for update
+                        const newBtn = btn.cloneNode(true);
+                        btn.parentNode.replaceChild(newBtn, btn);
+                        newBtn.addEventListener('click', async () => {
+                            newBtn.disabled = true;
+                            newBtn.textContent = 'Lädt...';
+                            const res = await window.electronAPI.updateMod({ profileName: selectedProfile, currentFile: upd.currentFile, downloadUrl: upd.downloadUrl, newFilename: upd.newFilename });
+                            if (res.success) {
+                                showToast('Update', `${upd.projectName} aktualisiert!`, 'success');
+                                newBtn.textContent = 'Installiert';
+                                newBtn.disabled = true;
+                                newBtn.style.background = '';
+                                newBtn.style.color = '';
+                                newBtn.style.fontWeight = '';
+                            } else {
+                                showToast('Fehler', res.error, 'error');
+                                newBtn.disabled = false;
+                                newBtn.textContent = 'Update';
+                            }
+                        });
+                    }
+                });
+            }
+        } catch (_) {}
+    }
 }
 
 async function performSearch(offset, getProfilesData) {

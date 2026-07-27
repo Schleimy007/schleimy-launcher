@@ -215,6 +215,26 @@ async function renderInstalledMods(name) {
         return;
     }
     
+    const profileData = currentProfiles[name];
+    
+    // Check for updates in background
+    let updates = [];
+    if (profileData) {
+        window.electronAPI.checkModUpdates({ profileName: name, loader: profileData.loader, mcVersion: profileData.version })
+            .then(upd => {
+                updates = upd || [];
+                // Now update the UI for each mod that has an update
+                updates.forEach(u => {
+                    const updateBtn = list.querySelector(`[data-update-file="${CSS.escape(u.currentFile)}"]`);
+                    if (updateBtn) {
+                        updateBtn.style.display = 'inline-block';
+                        updateBtn.title = `${u.currentVersion} → ${u.latestVersion}`;
+                    }
+                });
+            })
+            .catch(() => {});
+    }
+    
     mods.forEach(mod => {
         const item = document.createElement('div');
         item.style.display = 'flex';
@@ -231,10 +251,28 @@ async function renderInstalledMods(name) {
                 <div style="font-size:12px; color:var(--color-text-med);">${(mod.size / 1024 / 1024).toFixed(2)} MB</div>
             </div>
             <div style="display:flex; gap:8px;">
+                <button class="btn btn-sm update-btn" data-update-file="${mod.filename}" style="display:none; padding:6px 12px; font-size:12px; background:var(--color-success); color:#111; font-weight:700;">Update</button>
                 <button class="btn btn-secondary btn-sm toggle-btn" style="padding:6px 12px; font-size:12px;">${mod.enabled ? 'Deaktivieren' : 'Aktivieren'}</button>
                 <button class="btn btn-danger btn-sm del-btn" style="padding:6px 12px; font-size:12px;">Löschen</button>
             </div>
         `;
+        
+        item.querySelector('.update-btn').addEventListener('click', async (e) => {
+            const btn = e.target;
+            const upd = updates.find(u => u.currentFile === mod.filename);
+            if (!upd) return;
+            btn.disabled = true;
+            btn.textContent = 'Lädt...';
+            const res = await window.electronAPI.updateMod({ profileName: name, currentFile: upd.currentFile, downloadUrl: upd.downloadUrl, newFilename: upd.newFilename });
+            if (res.success) {
+                showToast('Update', `${mod.displayName} aktualisiert!`, 'success');
+                renderInstalledMods(name);
+            } else {
+                showToast('Fehler', res.error, 'error');
+                btn.disabled = false;
+                btn.textContent = 'Update';
+            }
+        });
         
         item.querySelector('.toggle-btn').addEventListener('click', async () => {
             const res = await window.electronAPI.toggleMod(name, mod.filename);
