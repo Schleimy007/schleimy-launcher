@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, shell, safeStorage, dialog } = require('electron');
 const path = require('path');
 const os = require('os');
+const { fetch } = require('undici');
 const fs = require('fs');
 const { Client } = require('minecraft-launcher-core');
 const { Auth } = require('msmc');
@@ -12,6 +13,29 @@ const crypto = require('crypto');
 const b4a = require('b4a');
 const net = require('net');
 const { autoUpdater } = require('electron-updater');const launcher = new Client();
+
+// ===== API CONSTANTS =====
+const MODRINTH_API = 'https://api.modrinth.com/v2';
+const CF_API = 'https://api.curseforge.com/v1';
+const CF_API_KEY = '$2a$10$YIMNoFAiFmthQIR34dpIjeUmrgWIAYBE2GOnXH50JI4Y65UT5vpNe'; // <-- Ersetze diesen Wert. Dein Key ist gültig, aber der User-Agent fehlt.
+const CF_GAME_ID = 432; // Minecraft
+const CF_HEADERS = {
+    'Accept': 'application/json',
+    'x-api-key': CF_API_KEY,
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'
+};
+const CF_CLASS = {
+    mod: 6,
+    modpack: 4471,
+    resourcepack: 12,
+    shader: 6552,
+};
+const CF_LOADER = {
+    forge: 1,
+    fabric: 4,
+    neoforge: 6,
+    quilt: 5,
+};
 let mainWindow;
 let logWindow = null;
 let gameProcess = null;
@@ -237,22 +261,31 @@ app.whenReady().then(() => {
     createWindow(); 
     setupDiscordRPC(); 
     
-    // Auto Updater Setup
-    autoUpdater.checkForUpdatesAndNotify();
-    
     autoUpdater.on('update-available', () => {
         if (mainWindow) mainWindow.webContents.send('launcher-event', { type: 'update-start' });
+    });
+    autoUpdater.on('update-not-available', () => {
+        sendEvent('info', 'Dein Launcher ist auf dem neuesten Stand.');
     });
     autoUpdater.on('download-progress', (progressObj) => {
         if (mainWindow) mainWindow.webContents.send('launcher-event', { type: 'update-progress', data: { percent: progressObj.percent } });
     });
     autoUpdater.on('update-downloaded', () => {
         if (mainWindow) mainWindow.webContents.send('launcher-event', { type: 'update-ready' });
-        setTimeout(() => autoUpdater.quitAndInstall(), 3000);
+        dialog.showMessageBox({
+            type: 'info',
+            title: 'Update bereit',
+            message: 'Ein neues Update wurde heruntergeladen. Die Anwendung wird jetzt neu gestartet, um das Update zu installieren.',
+            buttons: ['OK']
+        }).then(() => {
+            autoUpdater.quitAndInstall();
+        });
     });
     autoUpdater.on('error', (err) => {
         console.error('Updater Error:', err);
+        sendEvent('error', `Update-Fehler: ${err.message || 'Unbekannter Fehler'}`);
     });
+    autoUpdater.checkForUpdates();
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 
@@ -265,6 +298,389 @@ ipcMain.handle('window-maximize', (e) => {
     return true; 
 });
 ipcMain.handle('window-close', (e) => { BrowserWindow.fromWebContents(e.sender)?.close(); return true; });
+
+// ===== API IPC (Moved from Renderer) =====
+
+// Helper: wraps a promise with a timeout so it rejects instead of hanging
+function timeoutPromise(promise, ms) {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`Timeout after ${ms}ms`)), ms))
+    ]);
+}
+
+async function searchCurseForge(query, facets, limit = 20, offset = 0) {
+    try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+        const url = new URL(`${CF_API}/mods/search`);
+        url.searchParams.append('gameId', CF_GAME_ID);
+        url.searchParams.append('searchFilter', query);
+        url.searchParams.append('pageSize', limit);
+        url.searchParams.append('index', offset);
+        url.searchParams.append('sortField', 2); // Popularity
+        url.searchParams.append('sortOrder', 'desc');
+
+        if (facets.type && CF_CLASS[facets.type]) url.searchParams.append('classId', CF_CLASS[facets.type]);
+        if (facets.loader && CF_LOADER[facets.loader]) url.searchParams.append('modLoaderType', CF_LOADER[facets.loader]);
+        if (facets.version) url.searchParams.append('gameVersion', facets.version);
+
+        const res = await fetch(url, { headers: CF_HEADERS, signal: controller.signal });
+        clearTimeout(timeout);
+        if (!res.ok) {
+            console.error('CurseForge API Error:', res.status, res.statusText, await res.text());
+            return { hits: [], total_hits: 0, error: `CurseForge API Error: ${res.status}` };
+        }
+        const data = await res.json();
+
+        const hits = data.data.map(mod => ({
+            slug: `cf:${mod.id}`, title: mod.name, description: mod.summary,
+            author: mod.authors?.[0]?.name || 'Unbekannt', icon_url: mod.logo?.thumbnailUrl || '',
+            downloads: mod.downloadCount, versions: mod.latestFilesIndexes?.map(f => f.gameVersion) || [],
+            categories: mod.latestFilesIndexes?.map(f => {
+                const lt = f.modLoader;
+                if (lt === 1) return 'forge'; if (lt === 4) return 'fabric'; if (lt === 6) return 'neoforge'; if (lt === 5) return 'quilt';
+                return '';
+            }).filter(Boolean) || [],
+            project_type: Object.entries(CF_CLASS).find(([, v]) => v === mod.classId)?.[0] || 'mod',
+            _source: 'curseforge', _cfId: mod.id,
+            date_modified: mod.dateModified,
+        }));
+
+        return { hits, total_hits: data.pagination?.totalCount || hits.length };
+    } catch (e) {
+        if (e.name === 'AbortError') {
+            console.warn('CurseForge search timed out');
+            return { hits: [], total_hits: 0, error: 'CurseForge-Suche: Zeitüberschreitung (8s)' };
+        }
+        console.error('CurseForge search error:', e);
+        return { hits: [], total_hits: 0, error: e.message };
+    }
+}
+
+async function searchModrinth(query, facets, limit = 20, offset = 0) {
+    try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 20000);
+        const facetArray = [];
+        if (facets.type) facetArray.push([`project_type:${facets.type}`]);
+        if (facets.loader) facetArray.push([`categories:${facets.loader}`]);
+        if (facets.version) facetArray.push([`versions:${facets.version}`]);
+        if (facets.category) facetArray.push([`categories:${facets.category}`]);
+
+        const url = new URL(`${MODRINTH_API}/search`);
+        url.searchParams.append('query', query);
+        url.searchParams.append('limit', limit);
+        url.searchParams.append('offset', offset);
+        if (facetArray.length > 0) url.searchParams.append('facets', JSON.stringify(facetArray));
+
+        const res = await fetch(url, { 
+            signal: controller.signal,
+            headers: { 'User-Agent': 'SchleimyLauncher/4.0.5 (github.com/Schleimy007/schleimy-launcher)' }
+        });
+        clearTimeout(timeout);
+        if (!res.ok) throw new Error('Modrinth search failed');
+        const data = await res.json();
+        data.hits.forEach(h => { h._source = 'modrinth'; });
+        return data;
+    } catch (e) {
+        if (e.name === 'AbortError') {
+            console.warn('Modrinth search timed out');
+            return { hits: [], total_hits: 0, error: 'Modrinth-Suche: Zeitüberschreitung (20s)' };
+        }
+        console.error('Modrinth search error:', e);
+        return { hits: [], total_hits: 0, error: e.message };
+    }
+}
+
+ipcMain.handle('api:searchAll', async (_e, { query, facets, limit, offset, source }) => {
+    if (facets.loader === 'vanilla' && (!facets.type || facets.type === 'mod' || facets.type === 'modpack')) {
+        return { hits: [], total_hits: 0 };
+    }
+
+    if (source === 'curseforge') return searchCurseForge(query, facets, limit, offset);
+    if (source === 'modrinth') return searchModrinth(query, facets, limit, offset);
+
+    // Sequential: run CurseForge first (fast, 8s timeout), then Modrinth (20s timeout).
+    // This avoids connection-pool / rate-limit conflicts when both run in parallel.
+    const cfRes = await searchCurseForge(query, facets, limit, offset);
+    const mrRes = await searchModrinth(query, facets, Math.ceil(limit / 2), offset);
+
+    let cfHits = cfRes.hits || [];
+    let mrHits = mrRes.hits || [];
+
+    if (cfRes.error) {
+        console.warn('CurseForge search error:', cfRes.error);
+    }
+    if (mrRes.error) {
+        console.warn('Modrinth search error:', mrRes.error);
+    }
+
+    // Interleave only if both sources have results, otherwise show whichever succeeded
+    let combined;
+    if (cfHits.length > 0 && mrHits.length > 0) {
+        combined = [];
+        const maxLen = Math.max(cfHits.length, mrHits.length);
+        for (let i = 0; i < maxLen; i++) {
+            if (i < cfHits.length) combined.push(cfHits[i]);
+            if (i < mrHits.length) combined.push(mrHits[i]);
+        }
+    } else {
+        combined = cfHits.length > 0 ? cfHits : mrHits;
+    }
+
+    return {
+        hits: combined.slice(0, limit),
+        total_hits: (cfRes.total_hits || 0) + (mrRes.total_hits || 0),
+    };
+});
+
+async function getCurseForgeModVersion(cfId, loader, mcVersion) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    const url = new URL(`${CF_API}/mods/${cfId}/files`);
+    if (mcVersion) url.searchParams.append('gameVersion', mcVersion);
+    if (loader && CF_LOADER[loader]) url.searchParams.append('modLoaderType', CF_LOADER[loader]);
+    url.searchParams.append('pageSize', 1);
+
+    const res = await fetch(url, { headers: CF_HEADERS, signal: controller.signal });
+    clearTimeout(timeoutId);
+    if (!res.ok) throw new Error('Fehler beim Abrufen der CurseForge-Version');
+    const data = await res.json();
+
+    if (!data.data || data.data.length === 0) throw new Error(`Keine kompatible CF-Version für ${loader} ${mcVersion} gefunden.`);
+
+    const file = data.data[0];
+    return {
+        url: file.downloadUrl, filename: file.fileName,
+        dependencies: (file.dependencies || []).filter(d => d.relationType === 3).map(d => ({
+            dependency_type: 'required', project_id: `cf:${d.modId}`, _cfId: d.modId,
+        })),
+        // Add version metadata for lock file
+        versionId: file.id,
+        versionNumber: file.displayName,
+        projectId: `cf:${cfId}`,
+        source: 'curseforge'
+    };
+}
+
+ipcMain.handle('api:getModVersion', async (_e, { slug, loader, mcVersion }) => {
+    try {
+        if (typeof slug === 'string' && slug.startsWith('cf:')) {
+            const cfId = parseInt(slug.replace('cf:', ''));
+            return await getCurseForgeModVersion(cfId, loader, mcVersion);
+        }
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
+        const url = new URL(`${MODRINTH_API}/project/${slug}/version`);
+        if (loader) url.searchParams.append('loaders', JSON.stringify([loader]));
+        if (mcVersion) url.searchParams.append('game_versions', JSON.stringify([mcVersion]));
+
+        const res = await fetch(url, { 
+            signal: controller.signal,
+            headers: { 'User-Agent': 'SchleimyLauncher/4.0.5 (github.com/Schleimy007/schleimy-launcher)' }
+        });
+        clearTimeout(timeoutId);
+        if (!res.ok) throw new Error('Fehler beim Abrufen der Mod-Version');
+        const versions = await res.json();
+        if (versions.length === 0) throw new Error(`Keine kompatible Version für ${loader} ${mcVersion} gefunden.`);
+        
+        const version = versions[0];
+        const primaryFile = version.files.find(f => f.primary) || version.files[0];
+        return { 
+            url: primaryFile.url, 
+            filename: primaryFile.filename, 
+            dependencies: version.dependencies || [],
+            // Add version metadata for lock file
+            versionId: version.id,
+            versionNumber: version.version_number,
+            projectId: version.project_id,
+            source: 'modrinth'
+        };
+    } catch (e) {
+        console.error('getModVersion error:', e);
+        throw e; // Rethrow to be caught by renderer
+    }
+});
+
+ipcMain.handle('api:resolveAllDependencies', async (_e, { modVersionData, loader, mcVersion }) => {
+    const toDownload = [{
+        url: modVersionData.url,
+        filename: modVersionData.filename,
+        projectId: modVersionData.projectId,
+        source: modVersionData.source,
+        versionId: modVersionData.versionId,
+        versionNumber: modVersionData.versionNumber
+    }];
+    const resolvedIds = new Set();
+    
+    async function resolve(deps) {
+        for (const dep of deps) {
+            if (dep.dependency_type !== 'required') continue;
+            try {
+                let vInfo;
+                if (dep._cfId) {
+                    if (resolvedIds.has(`cf:${dep._cfId}`)) continue;
+                    resolvedIds.add(`cf:${dep._cfId}`);
+                    vInfo = await getCurseForgeModVersion(dep._cfId, loader, mcVersion);
+                } else if (dep.version_id) {
+                    if (resolvedIds.has(dep.version_id)) continue;
+                    resolvedIds.add(dep.version_id);
+                    const res = await fetch(`${MODRINTH_API}/version/${dep.version_id}`, {
+                        headers: { 'User-Agent': 'SchleimyLauncher/4.0.5 (github.com/Schleimy007/schleimy-launcher)' }
+                    });
+                    if (!res.ok) continue;
+                    const vData = await res.json();
+                    vInfo = { url: vData.files[0].url, filename: vData.files[0].filename, dependencies: vData.dependencies || [] };
+                } else if (dep.project_id) {
+                    if (resolvedIds.has(dep.project_id)) continue;
+                    resolvedIds.add(dep.project_id);
+                    vInfo = await ipcMain.handle('api:getModVersion', null, { slug: dep.project_id, loader, mcVersion });
+                }
+                if (vInfo) {
+                    toDownload.push({
+                        url: vInfo.url,
+                        filename: vInfo.filename,
+                        projectId: vInfo.projectId,
+                        source: vInfo.source,
+                        versionId: vInfo.versionId,
+                        versionNumber: vInfo.versionNumber
+                    });
+                    if (vInfo.dependencies?.length > 0) await resolve(vInfo.dependencies);
+                }
+            } catch (e) { console.warn('Dependency resolution failed for', dep, e); }
+        }
+    }
+    await resolve(modVersionData.dependencies);
+    return toDownload;
+});
+
+ipcMain.handle('api:getModDetails', async (_e, { slug, source, cfId }) => {
+    try {
+        if (source === 'curseforge' && cfId) {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 8000);
+            try {
+                const [descRes, detailsRes] = await Promise.all([
+                    fetch(`${CF_API}/mods/${cfId}/description`, { headers: CF_HEADERS, signal: controller.signal }),
+                    fetch(`${CF_API}/mods/${cfId}`, { headers: CF_HEADERS, signal: controller.signal })
+                ]);
+                clearTimeout(timeout);
+                if (!descRes.ok || !detailsRes.ok) {
+                    if (detailsRes.ok) {
+                        // Description failed, but details succeeded — return what we have
+                        const detailsData = await detailsRes.json();
+                        return {
+                            body: '<p>Keine detaillierte Beschreibung verfügbar.</p>',
+                            gallery: detailsData.data.screenshots?.map(s => ({ url: s.url, title: s.title })) || []
+                        };
+                    }
+                    return null;
+                }
+                const descData = await descRes.json();
+                const detailsData = await detailsRes.json();
+                return {
+                    body: descData.data || '<p>Keine Beschreibung verfügbar.</p>',
+                    gallery: detailsData.data.screenshots?.map(s => ({ url: s.url, title: s.title })) || []
+                };
+            } catch (fetchErr) {
+                clearTimeout(timeout);
+                if (fetchErr.name === 'AbortError') {
+                    console.warn('CurseForge getModDetails timed out for', cfId);
+                    return { body: '<p>CurseForge-Beschreibung konnte nicht geladen werden (Timeout).</p>', gallery: [] };
+                }
+                throw fetchErr;
+            }
+        } else {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 8000);
+            try {
+                const res = await fetch(`${MODRINTH_API}/project/${slug}`, { 
+                    signal: controller.signal,
+                    headers: { 'User-Agent': 'SchleimyLauncher/4.0.5 (github.com/Schleimy007/schleimy-launcher)' }
+                });
+                clearTimeout(timeout);
+                if (!res.ok) return null;
+                const data = await res.json();
+                return {
+                    body: data.body || data.description || '',
+                    gallery: data.gallery?.map(g => ({ url: g.url, title: g.title })) || []
+                };
+            } catch (fetchErr) {
+                clearTimeout(timeout);
+                if (fetchErr.name === 'AbortError') {
+                    console.warn('Modrinth getModDetails timed out for', slug);
+                    return { body: '<p>Beschreibung konnte nicht geladen werden (Timeout).</p>', gallery: [] };
+                }
+                throw fetchErr;
+            }
+        }
+    } catch (e) {
+        console.error('getModDetails error:', e);
+        return null;
+    }
+});
+
+ipcMain.handle('api:getModVersions', async (_e, { slug, source, cfId }) => {
+    try {
+        if (source === 'curseforge' && cfId) {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 8000);
+            try {
+                const url = new URL(`${CF_API}/mods/${cfId}/files`);
+                url.searchParams.append('pageSize', 50);
+                const res = await fetch(url, { headers: CF_HEADERS, signal: controller.signal });
+                clearTimeout(timeout);
+                if (!res.ok) return [];
+                const data = await res.json();
+                const CF_LOADER_MAP = { 1: 'forge', 4: 'fabric', 5: 'quilt', 6: 'neoforge' };
+                return (data.data || []).map(v => ({
+                    name: v.displayName,
+                    version_number: v.fileName.replace(/\.jar$/, ''),
+                    date: v.fileDate,
+                    downloads: v.downloadCount,
+                    loaders: (v.modLoaders || []).map(l => CF_LOADER_MAP[l]).filter(Boolean),
+                    game_versions: v.gameVersions,
+                    files: [{ filename: v.fileName, url: v.downloadUrl }],
+                    dependencies: (v.dependencies || []).filter(d => d.relationType === 3).map(d => ({
+                        dependency_type: 'required', project_id: `cf:${d.modId}`, _cfId: d.modId,
+                    })),
+                }));
+            } catch (fetchErr) {
+                clearTimeout(timeout);
+                if (fetchErr.name === 'AbortError') {
+                    console.warn('CurseForge getModVersions timed out for', cfId);
+                    return [];
+                }
+                throw fetchErr;
+            }
+        } else { // Modrinth
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 8000);
+            try {
+                const res = await fetch(`${MODRINTH_API}/project/${slug}/version`, { 
+                    signal: controller.signal,
+                    headers: { 'User-Agent': 'SchleimyLauncher/4.0.5 (github.com/Schleimy007/schleimy-launcher)' }
+                });
+                clearTimeout(timeout);
+                if (!res.ok) return [];
+                const data = await res.json();
+                return data.map(v => ({ ...v, date: v.date_published, dependencies: v.dependencies || [] }));
+            } catch (fetchErr) {
+                clearTimeout(timeout);
+                if (fetchErr.name === 'AbortError') {
+                    console.warn('Modrinth getModVersions timed out for', slug);
+                    return [];
+                }
+                throw fetchErr;
+            }
+        }
+    } catch (e) {
+        console.error('getModVersions error:', e);
+        return [];
+    }
+});
 
 // ===== AUTH IPC =====
 ipcMain.handle('login-microsoft', async () => {
@@ -311,13 +727,13 @@ ipcMain.handle('remove-account', (_e, uuid) => { saveAccounts(loadAccounts().fil
 // ===== PROFILE IPC =====
 ipcMain.handle('get-profiles', () => loadProfiles());
 ipcMain.handle('save-profiles', (_e, p) => { saveProfiles(p); return true; });
-ipcMain.handle('create-profile', (_e, { name, loader, version }) => {
+ipcMain.handle('create-profile', (_e, { name, loader, version, hostMode }) => {
     const pp = path.join(instancesDir, name);
     if (fs.existsSync(pp)) return { success: false, error: 'Profil existiert bereits' };
     fs.mkdirSync(pp, { recursive: true });
     ['mods','shaderpacks','resourcepacks'].forEach(d => fs.mkdirSync(path.join(pp, d), { recursive: true }));
     const profiles = loadProfiles();
-    profiles[name] = { loader, version, ram: null, javaPath: '', jvmArgs: '', jvmPreset: 'default' };
+    profiles[name] = { loader, version, ram: null, javaPath: '', jvmArgs: '', jvmPreset: 'default', hostMode: hostMode || 'none' };
     saveProfiles(profiles);
     return { success: true };
 });
@@ -351,7 +767,7 @@ ipcMain.handle('export-profile', async (_e, name) => {
             if (fs.statSync(full).isDirectory()) zip.addLocalFolder(full, entry); else zip.addLocalFile(full);
         }
         const profiles = loadProfiles();
-        if (profiles[name]) zip.addFile('schleimy-metadata.json', Buffer.from(JSON.stringify({ ...profiles[name], exportedAt: new Date().toISOString(), launcherVersion: '2.0.0' })));
+        if (profiles[name]) zip.addFile('schleimy-metadata.json', Buffer.from(JSON.stringify({ ...profiles[name], exportedAt: new Date().toISOString(), launcherVersion: '4.0.0' })));
         zip.writeZip(filePath);
         return { success: true };
     } catch (e) { return { success: false, error: e.message }; }
@@ -488,10 +904,54 @@ ipcMain.handle('export-mrpack', async (_e, { name, packName, packVersion, packDe
 ipcMain.handle('get-installed-mods', (_e, profileName) => {
     const mp = path.join(instancesDir, profileName, 'mods');
     if (!fs.existsSync(mp)) return [];
-    try { return fs.readdirSync(mp).filter(f => f.endsWith('.jar') || f.endsWith('.jar.disabled')).map(f => { const s = fs.statSync(path.join(mp, f)); return { filename: f, displayName: f.replace('.jar.disabled','').replace('.jar',''), enabled: !f.endsWith('.disabled'), size: s.size, modified: s.mtime.toISOString() }; }); } catch (_) { return []; }
+    // Read lock file to attach projectId (slug) to each mod for reliable matching in discover tab
+    const lockFilePath = path.join(instancesDir, profileName, 'schleimy-lock.json');
+    const lockFile = loadJSON(lockFilePath, { mods: {} });
+    try {
+        return fs.readdirSync(mp).filter(f => f.endsWith('.jar') || f.endsWith('.jar.disabled')).map(f => {
+            const s = fs.statSync(path.join(mp, f));
+            const lockEntry = lockFile.mods[f];
+            return {
+                filename: f,
+                displayName: f.replace('.jar.disabled','').replace('.jar',''),
+                enabled: !f.endsWith('.disabled'),
+                size: s.size,
+                modified: s.mtime.toISOString(),
+                projectId: lockEntry ? lockEntry.projectId : null
+            };
+        });
+    } catch (_) { return []; }
 });
-ipcMain.handle('toggle-mod', (_e, { profileName, filename }) => { return toggleFile(path.join(instancesDir, profileName, 'mods'), filename); });
-ipcMain.handle('delete-mod', (_e, { profileName, filename }) => { return deleteFile(path.join(instancesDir, profileName, 'mods'), filename); });
+ipcMain.handle('toggle-mod', (_e, { profileName, filename }) => {
+    const dir = path.join(instancesDir, profileName, 'mods');
+    const res = toggleFile(dir, filename);
+    if (res.success) { // Update lock file key
+        const lockFilePath = path.join(instancesDir, profileName, 'schleimy-lock.json');
+        if (fs.existsSync(lockFilePath)) {
+            const lockFile = loadJSON(lockFilePath, { mods: {} });
+            const modData = lockFile.mods[filename];
+            if (modData) {
+                delete lockFile.mods[filename];
+                lockFile.mods[res.newFilename] = modData;
+                saveJSON(lockFilePath, lockFile);
+            }
+        }
+    }
+    return res;
+});
+ipcMain.handle('delete-mod', (_e, { profileName, filename }) => {
+    const dir = path.join(instancesDir, profileName, 'mods');
+    const res = deleteFile(dir, filename);
+    if (res.success) { // Remove from lock file
+        const lockFilePath = path.join(instancesDir, profileName, 'schleimy-lock.json');
+        if (fs.existsSync(lockFilePath)) {
+            const lockFile = loadJSON(lockFilePath, { mods: {} });
+            delete lockFile.mods[filename];
+            saveJSON(lockFilePath, lockFile);
+        }
+    }
+    return res;
+});
 
 // Feature 4: Shader & Resource Pack Management
 ipcMain.handle('get-shaderpacks', (_e, pn) => listContentDir(path.join(instancesDir, pn, 'shaderpacks'), '.zip'));
@@ -516,7 +976,7 @@ function deleteFile(dir, filename) {
 
 // Download handler for mods/shaders/resourcepacks
 ipcMain.on('download-mod', async (_e, data) => {
-    const { downloadUrl, profileName, fileName, targetDir } = data;
+    const { downloadUrl, profileName, fileName, targetDir, projectId, source, versionId, versionNumber } = data;
     const subDir = targetDir || 'mods';
     const tp = path.join(instancesDir, profileName, subDir);
     if (!fs.existsSync(tp)) fs.mkdirSync(tp, { recursive: true });
@@ -531,39 +991,108 @@ ipcMain.on('download-mod', async (_e, data) => {
             while (true) { const { done, value } = await reader.read(); if (done) break; chunks.push(Buffer.from(value)); received += value.length; sendEvent('download-progress', `${fileName}`, { fileName, progress: Math.round((received/total)*100), received, total }); }
             fs.writeFileSync(filePath, Buffer.concat(chunks));
         } else { fs.writeFileSync(filePath, Buffer.from(await response.arrayBuffer())); }
-        sendEvent('success', `${fileName} erfolgreich installiert!`, { fileName });
+        sendEvent('success', `${fileName} erfolgreich installiert!`, { fileName, projectId });
+
+        // If it's a mod, save metadata to lock file
+        if (subDir === 'mods' && projectId && source && versionId) {
+            const lockFilePath = path.join(instancesDir, profileName, 'schleimy-lock.json');
+            const lockFile = loadJSON(lockFilePath, { mods: {} });
+            lockFile.mods[fileName] = { projectId, source, versionId, versionNumber };
+            saveJSON(lockFilePath, lockFile);
+        }
     } catch (error) { sendEvent('error', `Download fehlgeschlagen: ${error.message}`, { fileName }); }
 });
 
 // Feature 2: Check for mod updates
 ipcMain.handle('check-mod-updates', async (_e, { profileName, loader, mcVersion }) => {
-    const mp = path.join(instancesDir, profileName, 'mods');
-    if (!fs.existsSync(mp)) return [];
-    const mods = fs.readdirSync(mp).filter(f => f.endsWith('.jar'));
+    const lockFilePath = path.join(instancesDir, profileName, 'schleimy-lock.json');
+    if (!fs.existsSync(lockFilePath)) return [];
+
+    const lockFile = loadJSON(lockFilePath, {});
+    const installedMods = lockFile.mods || {};
     const updates = [];
-    const crypto = require('crypto');
-    for (const mod of mods) {
+
+    for (const filename in installedMods) {
+        if (!Object.prototype.hasOwnProperty.call(installedMods, filename)) continue;
+
+        const modPath = path.join(instancesDir, profileName, 'mods', filename);
+        if (!fs.existsSync(modPath)) continue; // Skip if file is missing
+
+        const modInfo = installedMods[filename];
         try {
-            const sha1 = crypto.createHash('sha1').update(fs.readFileSync(path.join(mp, mod))).digest('hex');
-            const res = await fetch(`https://api.modrinth.com/v2/version_file/${sha1}?algorithm=sha1`);
-            if (!res.ok) continue;
-            const vData = await res.json();
-            const vRes = await fetch(`https://api.modrinth.com/v2/project/${vData.project_id}/version?loaders=${JSON.stringify([loader])}&game_versions=${JSON.stringify([mcVersion])}`);
-            if (!vRes.ok) continue;
-            const versions = await vRes.json();
-            if (versions.length > 0 && versions[0].id !== vData.id) {
-                const lf = versions[0].files.find(f => f.primary) || versions[0].files[0];
-                updates.push({ currentFile: mod, projectId: vData.project_id, projectName: vData.name || mod.replace('.jar',''), currentVersion: vData.version_number, latestVersion: versions[0].version_number, downloadUrl: lf.url, newFilename: lf.filename });
+            let latestVersion = null;
+            if (modInfo.source === 'modrinth') {
+                const res = await fetch(`${MODRINTH_API}/project/${modInfo.projectId}/version?loaders=${JSON.stringify([loader])}&game_versions=${JSON.stringify([mcVersion])}`);
+                if (!res.ok) continue;
+                const versions = await res.json();
+                if (versions.length > 0) {
+                    latestVersion = versions[0];
+                }
+            } else if (modInfo.source === 'curseforge') {
+                const cfId = modInfo.projectId.startsWith('cf:') ? modInfo.projectId.substring(3) : modInfo.projectId;
+                const url = new URL(`${CF_API}/mods/${cfId}/files`);
+                url.searchParams.append('gameVersion', mcVersion);
+                if (CF_LOADER[loader]) url.searchParams.append('modLoaderType', CF_LOADER[loader]);
+                url.searchParams.append('pageSize', 1);
+                const res = await fetch(url, { headers: CF_HEADERS });
+                if (!res.ok) continue;
+                const cfData = await res.json();
+                if (cfData.data && cfData.data.length > 0) {
+                    const file = cfData.data[0];
+                    latestVersion = {
+                        id: file.id,
+                        project_id: modInfo.projectId,
+                        version_number: file.displayName,
+                        name: file.displayName,
+                        files: [{ url: file.downloadUrl, filename: file.fileName }]
+                    };
+                }
             }
-        } catch (_) {}
+
+            if (latestVersion && latestVersion.id !== modInfo.versionId) {
+                const latestFile = latestVersion.files.find(f => f.primary) || latestVersion.files[0];
+                updates.push({
+                    currentFile: filename,
+                    projectName: latestVersion.name || modInfo.projectId,
+                    currentVersion: modInfo.versionNumber,
+                    latestVersion: latestVersion.version_number,
+                    downloadUrl: latestFile.url,
+                    newFilename: latestFile.filename,
+                    newMeta: {
+                        projectId: modInfo.projectId,
+                        source: modInfo.source,
+                        versionId: latestVersion.id,
+                        versionNumber: latestVersion.version_number
+                    }
+                });
+            }
+        } catch (e) {
+            console.warn(`Update check for ${filename} failed:`, e);
+        }
     }
     return updates;
 });
-ipcMain.handle('update-mod', async (_e, { profileName, currentFile, downloadUrl, newFilename }) => {
+ipcMain.handle('update-mod', async (_e, { profileName, currentFile, downloadUrl, newFilename, newMeta }) => {
     const mp = path.join(instancesDir, profileName, 'mods');
     try { 
         if (!fs.existsSync(mp)) fs.mkdirSync(mp, { recursive: true });
-        const res = await fetch(downloadUrl); if (!res.ok) throw new Error(`HTTP ${res.status}`); fs.writeFileSync(path.join(mp, newFilename), Buffer.from(await res.arrayBuffer())); const old = path.join(mp, currentFile); if (fs.existsSync(old) && currentFile !== newFilename) fs.unlinkSync(old); return { success: true }; }
+        const res = await fetch(downloadUrl); 
+        if (!res.ok) throw new Error(`HTTP ${res.status}`); 
+        fs.writeFileSync(path.join(mp, newFilename), Buffer.from(await res.arrayBuffer())); 
+        const old = path.join(mp, currentFile); 
+        if (fs.existsSync(old) && currentFile !== newFilename) fs.unlinkSync(old);
+
+        // Update lock file
+        const lockFilePath = path.join(instancesDir, profileName, 'schleimy-lock.json');
+        if (fs.existsSync(lockFilePath) && newMeta) {
+            const lockFile = loadJSON(lockFilePath, { mods: {} });
+            delete lockFile.mods[currentFile];
+            lockFile.mods[newFilename] = newMeta;
+            saveJSON(lockFilePath, lockFile);
+        }
+
+        return { success: true }; 
+    }
     catch (e) { return { success: false, error: e.message }; }
 });
 

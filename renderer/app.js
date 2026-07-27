@@ -9,60 +9,96 @@ let sysMemoryGB = 4;
 let isGameRunning = false;
 
 document.addEventListener('DOMContentLoaded', async () => {
-    initUI();
-    initCommunityTab();
+    try { initUI(); } catch(e) { console.error('initUI failed:', e); }
+    try { initCommunityTab(); } catch(e) { console.error('initCommunityTab failed:', e); }
     
     // --- Setup Global Listeners ---
-    setupEventListeners();
-    setupIpcListeners();
+    try { setupEventListeners(); } catch(e) { console.error('setupEventListeners failed:', e); }
+    try { setupIpcListeners(); } catch(e) { console.error('setupIpcListeners failed:', e); }
 
     // --- Initial Data Load ---
     await loadInitialData();
+
+    // Clear the HTML failsafe timer since we loaded successfully
+    if (window.__loaderFailsafe) clearTimeout(window.__loaderFailsafe);
 });
 
 async function loadInitialData() {
+    const loader = document.getElementById('startup-loader');
+    
+    // HARD TIMEOUT: No matter what, hide the loader after 8 seconds
+    const failsafe = setTimeout(() => {
+        if (loader && loader.style.display !== 'none') {
+            console.warn('Failsafe: hiding loader after timeout');
+            loader.style.opacity = '0';
+            setTimeout(() => loader.style.display = 'none', 500);
+        }
+    }, 8000);
+
     try {
         // 1. Auth Status
-        const auth = await window.electronAPI.getAuth();
-        updateAuthUI(auth);
+        try {
+            const auth = await window.electronAPI.getAuth();
+            updateAuthUI(auth);
+        } catch (e) { console.error('Auth load failed:', e); }
 
         // 2. Settings & Memory
-        const settings = await window.electronAPI.getSettings();
-        sysMemoryGB = await window.electronAPI.getSystemMemory();
-        
-        const ramSlider = document.getElementById('setting-ram');
-        ramSlider.max = sysMemoryGB;
-        ramSlider.value = settings.ram || 4;
-        document.getElementById('setting-ram-val').textContent = `${ramSlider.value} GB`;
-        document.getElementById('sys-ram').textContent = sysMemoryGB;
-        
-        if (settings.javaPath) document.getElementById('setting-java').value = settings.javaPath;
+        let settings = {};
+        try {
+            settings = await window.electronAPI.getSettings() || {};
+            sysMemoryGB = await window.electronAPI.getSystemMemory() || 4;
+            
+            const ramSlider = document.getElementById('setting-ram');
+            if (ramSlider) {
+                ramSlider.max = sysMemoryGB;
+                ramSlider.value = settings.ram || 4;
+                const ramVal = document.getElementById('setting-ram-val');
+                if (ramVal) ramVal.textContent = `${ramSlider.value} GB`;
+            }
+            const sysRam = document.getElementById('sys-ram');
+            if (sysRam) sysRam.textContent = sysMemoryGB;
+            
+            if (settings.javaPath) {
+                const javaInput = document.getElementById('setting-java');
+                if (javaInput) javaInput.value = settings.javaPath;
+            }
+        } catch (e) { console.error('Settings load failed:', e); }
 
-        // 3. Profiles & Minecraft Versions
-        await loadProfiles();
-        
-        const mcVersions = await fetchMojangVersions();
-        populateVersionSelects(mcVersions);
+        // 3. Profiles
+        try {
+            await loadProfiles();
+        } catch (e) { console.error('Profile load failed:', e); }
 
-        // 4. Init Discover logic
-        initDiscover(getProfilesData);
-        // Trigger initial search
-        document.getElementById('search-input').dispatchEvent(new Event('input'));
+        // 4. Minecraft Versions (network, can be slow)
+        try {
+            const mcVersions = await fetchMojangVersions();
+            populateVersionSelects(mcVersions);
+        } catch (e) { console.error('MC versions load failed:', e); }
+
+        // 5. Init Discover logic
+        try {
+            initDiscover(getProfilesData);
+            document.getElementById('search-input')?.dispatchEvent(new Event('input'));
+        } catch (e) { console.error('Discover init failed:', e); }
         
-        // 5. Setup Wizard & Splash Screen
+        // 6. Setup Wizard & Splash Screen
         if (!settings.setupCompleted) {
-            document.getElementById('startup-loader').style.display = 'none';
-            document.getElementById('setup-wizard').style.display = 'flex';
+            loader.style.display = 'none';
+            const wizard = document.getElementById('setup-wizard');
+            if (wizard) wizard.style.display = 'flex';
             initSetupWizard();
         } else {
-            const loader = document.getElementById('startup-loader');
             loader.style.opacity = '0';
             setTimeout(() => loader.style.display = 'none', 500);
         }
     } catch (e) {
-        document.getElementById('startup-loader').innerHTML = `<div style="padding:20px;color:red;word-wrap:break-word;">Startup Error: ${e.message}<br>${e.stack}</div>`;
-        console.error(e);
+        console.error('Startup error:', e);
+        // Even on total failure, hide the loader so the app is usable
+        loader.style.opacity = '0';
+        setTimeout(() => loader.style.display = 'none', 500);
     }
+
+    clearTimeout(failsafe);
 }
 
 async function initSetupWizard() {
@@ -357,6 +393,9 @@ function setupIpcListeners() {
             } else {
                 showToast('Erfolg', evt.message, 'success');
             }
+        }
+        else if (evt.type === 'info') {
+            showToast('Info', evt.message, 'info');
         }
     });
 

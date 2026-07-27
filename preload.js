@@ -1,6 +1,13 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
+    // API (proxied through main)
+    searchAll: (args) => ipcRenderer.invoke('api:searchAll', args),
+    getModDetails: (args) => ipcRenderer.invoke('api:getModDetails', args),
+    getModVersions: (args) => ipcRenderer.invoke('api:getModVersions', args),
+    getModVersion: (args) => ipcRenderer.invoke('api:getModVersion', args),
+    resolveAllDependencies: (args) => ipcRenderer.invoke('api:resolveAllDependencies', args),
+
     // Window Controls
     windowMinimize: () => ipcRenderer.invoke('window-minimize'),
     windowMaximize: () => ipcRenderer.invoke('window-maximize'),

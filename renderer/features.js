@@ -51,7 +51,7 @@ export function setupFeatures() {
             if (updates && updates.length > 0) {
                 showToast('Updates', `${updates.length} Update(s) gefunden! Installiere...`, 'info');
                 for (const upd of updates) {
-                    await window.electronAPI.updateMod({ profileName, currentFile: upd.currentFile, downloadUrl: upd.downloadUrl, newFilename: upd.newFilename });
+                    await window.electronAPI.updateMod({ profileName, currentFile: upd.currentFile, downloadUrl: upd.downloadUrl, newFilename: upd.newFilename, newMeta: upd.newMeta });
                 }
                 showToast('Updates', `${updates.length} Mod(s) aktualisiert!`, 'success');
             } else {
@@ -87,7 +87,13 @@ export function setupFeatures() {
     if (btnShortcut) {
         btnShortcut.addEventListener('click', async () => {
             const profileName = document.getElementById('inst-detail-name').innerText;
-            await window.electronAPI.createShortcut({ profileName });
+            const profiles = getProfilesData();
+            const pData = profiles[profileName];
+            if (!pData) {
+                showToast('Fehler', 'Profil-Daten nicht gefunden.', 'error');
+                return;
+            }
+            await window.electronAPI.createShortcut({ profileName, version: pData.version, loader: pData.loader });
             showToast('Shortcut', 'Desktop-Verknüpfung erstellt.', 'success');
         });
     }
@@ -106,7 +112,12 @@ export function setupFeatures() {
         btnCrash.addEventListener('click', async () => {
             const profileName = document.getElementById('inst-detail-name').innerText;
             const result = await window.electronAPI.analyzeCrash(profileName);
-            showToast('KI Analyse', result || 'Kein Crash-Log gefunden.', 'info');
+            if (result && result.found) {
+                const message = `<b>Ursache:</b> ${result.cause}<br><b>Lösung:</b> ${result.solution || 'N/A'}<br><b>Mods:</b> ${result.involvedMods.join(', ') || 'N/A'}`;
+                showToast(`Analyse: ${result.filename}`, message, 'info');
+            } else {
+                showToast('Analyse', result.message || 'Kein Crash-Log gefunden.', 'info');
+            }
         });
     }
 

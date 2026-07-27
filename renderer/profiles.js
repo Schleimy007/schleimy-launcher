@@ -117,32 +117,36 @@ let currentActiveInstance = null;
 
 async function openInstanceDetails(name) {
     currentActiveInstance = name;
-    openInstanceModal(name);
+    const modal = document.getElementById('modal-instance');
+    openInstanceModal(name); // from ui.js
     
     // Setup tab switching
-    document.querySelectorAll('.tab-header').forEach(header => {
+    modal.querySelectorAll('.tab-header').forEach(header => {
         // Remove old listeners to avoid duplicates
         const newHeader = header.cloneNode(true);
         header.parentNode.replaceChild(newHeader, header);
         
         newHeader.addEventListener('click', (e) => {
-            document.querySelectorAll('.tab-header').forEach(h => {
+            modal.querySelectorAll('.tab-header').forEach(h => {
                 h.classList.remove('active');
-                h.style.color = 'var(--color-text-med)';
             });
             e.target.classList.add('active');
-            e.target.style.color = 'inherit';
             
-            document.querySelectorAll('.addon-list').forEach(list => {
+            modal.querySelectorAll('.addon-list').forEach(list => {
                 list.style.display = 'none';
             });
-            document.getElementById(e.target.dataset.target).style.display = 'flex';
+            const targetId = e.target.dataset.target;
+            const targetEl = document.getElementById(targetId);
+            if (targetEl) {
+                targetEl.style.display = 'flex';
+            }
         });
     });
 
     await renderInstalledMods(name);
     await renderAddons(name, 'inst-shaders-list', 'getShaderPacks', 'toggleShaderPack', 'deleteShaderPack', 'Keine Shaders installiert.');
     await renderAddons(name, 'inst-rp-list', 'getResourcePacks', 'toggleResourcePack', 'deleteResourcePack', 'Keine Resource Packs installiert.');
+    await renderScreenshots(name); // NEU: Screenshots Tab
 }
 
 async function renderAddons(profileName, listId, getIpc, toggleIpc, deleteIpc, emptyMsg) {
@@ -263,7 +267,13 @@ async function renderInstalledMods(name) {
             if (!upd) return;
             btn.disabled = true;
             btn.textContent = 'Lädt...';
-            const res = await window.electronAPI.updateMod({ profileName: name, currentFile: upd.currentFile, downloadUrl: upd.downloadUrl, newFilename: upd.newFilename });
+            const res = await window.electronAPI.updateMod({
+                profileName: name,
+                currentFile: upd.currentFile,
+                downloadUrl: upd.downloadUrl,
+                newFilename: upd.newFilename,
+                newMeta: upd.newMeta // Pass new metadata to update lock file
+            });
             if (res.success) {
                 showToast('Update', `${mod.displayName} aktualisiert!`, 'success');
                 renderInstalledMods(name);
@@ -298,6 +308,56 @@ async function renderInstalledMods(name) {
     });
 }
 
+async function renderScreenshots(name) {
+    const list = document.getElementById('inst-gallery-list');
+    list.innerHTML = '<p style="padding:8px; text-align:center; color:var(--color-text-med);">Lade Screenshots...</p>';
+
+    const screenshots = await window.electronAPI.getScreenshots(name);
+    list.innerHTML = '';
+
+    if (screenshots.length === 0) {
+        list.innerHTML = '<p style="padding:16px; text-align:center; color:var(--color-text-med);">Keine Screenshots gefunden.</p>';
+        return;
+    }
+
+    const grid = document.createElement('div');
+    grid.className = 'gallery-grid';
+
+    screenshots.forEach(ss => {
+        const item = document.createElement('div');
+        item.className = 'gallery-item';
+        item.style.cursor = 'pointer';
+
+        const img = document.createElement('img');
+        img.src = `file://${ss.path}`; // Electron can load local files directly
+        img.alt = ss.filename;
+        item.appendChild(img);
+
+        const overlay = document.createElement('div');
+        overlay.className = 'gallery-item-overlay';
+        overlay.textContent = new Date(ss.date).toLocaleDateString();
+        item.appendChild(overlay);
+
+        item.addEventListener('click', async () => {
+            // Optionally, open a larger view or copy to clipboard
+            if (confirm(`Screenshot ${ss.filename} in Zwischenablage kopieren?`)) {
+                const res = await window.electronAPI.copyScreenshot(ss.path);
+                if (res.success) {
+                    showToast('Erfolg', 'Screenshot kopiert!', 'success');
+                } else {
+                    showToast('Fehler', res.error, 'error');
+                }
+            }
+        });
+
+        grid.appendChild(item);
+    });
+
+    list.appendChild(grid);
+}
+
+// Event listeners for instance actions (already existing, just for context)
+// ...
 document.getElementById('btn-inst-folder').addEventListener('click', () => {
     if (currentActiveInstance) window.electronAPI.openProfileFolder(currentActiveInstance);
 });

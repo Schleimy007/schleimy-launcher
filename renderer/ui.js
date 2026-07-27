@@ -28,6 +28,11 @@ export function initUI() {
         instModal.classList.remove('active');
     });
 
+    const modDetailModal = document.getElementById('modal-mod-detail');
+    document.getElementById('btn-mod-detail-close').addEventListener('click', () => {
+        modDetailModal.classList.remove('active');
+    });
+
     // Close modals on overlay click
     window.addEventListener('click', (e) => {
         if (e.target.classList.contains('modal-overlay')) {
