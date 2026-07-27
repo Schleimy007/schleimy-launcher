@@ -1,6 +1,6 @@
 {
   "name": "schleimy-launcher",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "Schleimy Launcher – Ein moderner Minecraft Mod-Launcher",
   "main": "main.js",
   "scripts": {

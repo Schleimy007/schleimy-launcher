@@ -291,13 +291,17 @@ function setupIpcListeners() {
             updateToastProgress(evt.message);
         } 
         else if (evt.type === 'update-start') {
+            document.getElementById('startup-loader').style.display = 'none';
             document.getElementById('update-overlay').style.display = 'flex';
+            document.getElementById('update-status-text').textContent = 'Lade Update herunter... (0%)';
         }
         else if (evt.type === 'public-server-found') {
             window.dispatchEvent(new CustomEvent('public-server-found', { detail: evt.data }));
         }
         else if (evt.type === 'update-progress') {
-            document.getElementById('update-progress-bar').style.width = (evt.data?.percent || 0) + '%';
+            const pct = Math.round(evt.data?.percent || 0);
+            document.getElementById('update-progress-bar').style.width = pct + '%';
+            document.getElementById('update-status-text').textContent = `Lade Update herunter... (${pct}%)`;
         }
         else if (evt.type === 'update-ready') {
             document.getElementById('update-progress-bar').style.width = '100%';
