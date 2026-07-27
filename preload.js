@@ -58,7 +58,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     p2pFetchPublic: () => ipcRenderer.invoke('p2p-fetch-public'),
     p2pJoin: (code) => ipcRenderer.invoke('p2p-join', { code }),
     p2pGetInfo: (code) => ipcRenderer.invoke('p2p-get-info', { code }),
-    onP2PStatus: (callback) => ipcRenderer.on('p2p-status', callback),
+    onP2PStatus: (callback) => {
+        const handler = (_event, data) => callback(data);
+        ipcRenderer.on('p2p-status', handler);
+        return () => ipcRenderer.removeListener('p2p-status', handler);
+    },
 
     // Game
     startGame: (options) => ipcRenderer.send('start-minecraft', options),

@@ -104,7 +104,7 @@ async function joinServer(code, preloadedInfo = null) {
     showToast('Erfolg', 'Tunnel aufgebaut! Bereite Spiel vor...', 'success');
     
     // Auto Mod Installer / Profile creation
-    const profileName = `Hosted: ${info.host}`;
+    const profileName = `Hosted - ${info.host}`.replace(/[^a-zA-Z0-9 -]/g, '');
     const profiles = getProfilesData();
     
     // Create new profile if it doesn't exist

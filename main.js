@@ -608,6 +608,20 @@ function ensureLauncherListeners() {
             }
         }
     });
+    launcher.on('close', (code) => { 
+        const pt = gameStartTime ? Math.floor((Date.now() - gameStartTime) / 1000) : 0; 
+        gameProcess = null; 
+        gameStartTime = null; 
+        updateDiscordRPC('Im Hauptmenü', 'Durchstöbert Modpacks');
+        sendEvent('game-closed', 'Minecraft beendet.', { exitCode: code, playTimeSeconds: pt }); 
+        stopP2P();
+    });
+    launcher.on('error', (err) => {
+        gameProcess = null;
+        gameStartTime = null;
+        sendEvent('game-closed', `Minecraft beendet (Fehler).`);
+        stopP2P();
+    });
     launcherListenersReady = true;
 }
 
@@ -684,7 +698,10 @@ ipcMain.on('start-minecraft', async (_e, options) => {
     
     // Auto-Connect if join proxy is active
     if (options.isJoin) {
-        opts.customArgs.push('--server', '127.0.0.1', '--port', '25565');
+        opts.server = {
+            host: '127.0.0.1',
+            port: '25565'
+        };
     }
 
     const javaPath = profileCfg.javaPath || settings.javaPath;
@@ -715,22 +732,6 @@ ipcMain.on('start-minecraft', async (_e, options) => {
         }
 
         gameProcess = await launcher.launch(opts);
-        if (gameProcess) {
-            gameProcess.on('close', (code) => {
-                const pt = gameStartTime ? Math.floor((Date.now() - gameStartTime) / 1000) : 0; 
-                gameProcess = null; 
-                gameStartTime = null; 
-                updateDiscordRPC('Im Hauptmenü', 'Durchstöbert Modpacks');
-                sendEvent('game-closed', 'Minecraft beendet.', { exitCode: code, playTimeSeconds: pt }); 
-                stopP2P();
-            });
-            gameProcess.on('error', (err) => {
-                gameProcess = null;
-                gameStartTime = null;
-                sendEvent('error', `Absturz: ${err.message}`);
-                stopP2P();
-            });
-        }
         sendEvent('game-started', 'Spiel gestartet!', { startTime: gameStartTime });
     } catch (error) { gameProcess = null; gameStartTime = null; sendEvent('error', `Startfehler: ${error.message}`); }
 });

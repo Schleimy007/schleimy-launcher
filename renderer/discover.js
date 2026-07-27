@@ -115,7 +115,10 @@ function renderResults(data, getProfilesData, installedMods = []) {
             compatHint = `<span style="color:var(--color-text-med); font-size:12px;">Kein Profil gewählt</span>`;
         }
 
-        const isInstalled = installedMods.some(m => m.toLowerCase().includes(mod.slug.toLowerCase()) || m.toLowerCase().includes(mod.title.toLowerCase().replace(/ /g, '-')));
+        const isInstalled = installedMods.some(m => {
+            const fn = (m.filename || m).toLowerCase();
+            return fn.includes(mod.slug.toLowerCase()) || fn.includes(mod.title.toLowerCase().replace(/ /g, '-'));
+        });
 
         const iconUrl = mod.icon_url || 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23242424"><rect width="24" height="24"/></svg>';
         const downloads = (mod.downloads / 1000000 >= 1) ? (mod.downloads / 1000000).toFixed(1) + 'M' : 

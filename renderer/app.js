@@ -277,7 +277,7 @@ function setupEventListeners() {
 }
 
 function setupIpcListeners() {
-    window.electronAPI.onLauncherEvent((e, evt) => {
+    window.electronAPI.onLauncherEvent((evt) => {
         const statusDisplay = document.getElementById('play-status-text');
         
         if (evt.type === 'progress') {
@@ -333,7 +333,7 @@ function setupIpcListeners() {
     });
 
     if (window.electronAPI.onP2PStatus) {
-        window.electronAPI.onP2PStatus((e, data) => {
+        window.electronAPI.onP2PStatus((data) => {
             if (data.hosting) {
                 showToast('P2P Host Aktiv!', `Andere können per Code beitreten: ${data.code}`, 'success');
             }

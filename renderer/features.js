@@ -1,5 +1,6 @@
 // features.js - Implements additional features for the Schleimy Launcher
 import { showToast } from './toasts.js';
+import { getProfilesData } from './profiles.js';
 
 // Setup additional feature listeners on DOMContentLoaded
 export function setupFeatures() {
@@ -42,13 +43,20 @@ export function setupFeatures() {
     if (btnInstUpdate) {
         btnInstUpdate.addEventListener('click', async () => {
             const profileName = document.getElementById('inst-detail-name').innerText;
+            const profiles = getProfilesData();
+            const pData = profiles[profileName];
+            if (!pData) { showToast('Fehler', 'Profil nicht gefunden.', 'error'); return; }
             showToast('Updates', 'Suche nach Updates...', 'info');
-            // Assuming we check for mods
-            const mods = await window.electronAPI.getInstalledMods(profileName);
-            for (let mod of mods) {
-                await window.electronAPI.checkModUpdates({ modId: mod.filename, version: 'latest' });
+            const updates = await window.electronAPI.checkModUpdates({ profileName, loader: pData.loader, mcVersion: pData.version });
+            if (updates && updates.length > 0) {
+                showToast('Updates', `${updates.length} Update(s) gefunden! Installiere...`, 'info');
+                for (const upd of updates) {
+                    await window.electronAPI.updateMod({ profileName, currentFile: upd.currentFile, downloadUrl: upd.downloadUrl, newFilename: upd.newFilename });
+                }
+                showToast('Updates', `${updates.length} Mod(s) aktualisiert!`, 'success');
+            } else {
+                showToast('Updates', 'Alle Mods sind aktuell.', 'success');
             }
-            showToast('Updates', 'Alle Mods sind aktuell.', 'success');
         });
     }
 
@@ -57,11 +65,19 @@ export function setupFeatures() {
     if (btnInstConflicts) {
         btnInstConflicts.addEventListener('click', async () => {
             const profileName = document.getElementById('inst-detail-name').innerText;
-            const conflicts = await window.electronAPI.checkModConflicts(profileName);
-            if (conflicts && conflicts.length > 0) {
-                showToast('Konflikte', `Es wurden ${conflicts.length} Konflikte gefunden.`, 'error');
+            const profiles = getProfilesData();
+            const pData = profiles[profileName];
+            if (!pData) { showToast('Fehler', 'Profil nicht gefunden.', 'error'); return; }
+            showToast('Konflikte', 'Prüfe auf Konflikte & fehlende Abhängigkeiten...', 'info');
+            const result = await window.electronAPI.checkModConflicts({ profileName, loader: pData.loader, mcVersion: pData.version });
+            const total = (result.conflicts?.length || 0) + (result.missing?.length || 0);
+            if (total > 0) {
+                let msg = '';
+                if (result.conflicts?.length) msg += `${result.conflicts.length} Konflikt(e): ${result.conflicts.map(c => c.message).join(', ')}. `;
+                if (result.missing?.length) msg += `${result.missing.length} fehlende Abhängigkeit(en): ${result.missing.map(m => m.projectName).join(', ')}.`;
+                showToast('Konflikte gefunden!', msg, 'error');
             } else {
-                showToast('Konflikte', 'Keine Konflikte gefunden.', 'success');
+                showToast('Alles OK!', 'Keine Konflikte oder fehlende Abhängigkeiten gefunden.', 'success');
             }
         });
     }
