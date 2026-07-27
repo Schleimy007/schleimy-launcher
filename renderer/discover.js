@@ -5,8 +5,10 @@ import { showToast } from './toasts.js';
 let searchTimeout = null;
 let currentOffset = 0;
 const LIMIT = 24;
+let lastGetProfilesData = null;
 
 export function initDiscover(getProfilesData) {
+    lastGetProfilesData = getProfilesData;
     const searchInput = document.getElementById('search-input');
     const searchType = document.getElementById('search-type');
     const filterVersion = document.getElementById('filter-version');
@@ -32,10 +34,45 @@ export function initDiscover(getProfilesData) {
     if (playSelect) {
         playSelect.addEventListener('change', triggerSearch);
     }
+
+    // Refresh install states when switching to the discover tab
+    document.querySelector('[data-tab="discover"]')?.addEventListener('click', () => {
+        refreshInstallStates();
+    });
+}
+
+async function refreshInstallStates() {
+    const selectedProfile = document.getElementById('play-profile-select').value;
+    if (!selectedProfile) return;
+    
+    const installedMods = await window.electronAPI.getInstalledMods(selectedProfile);
+    const buttons = document.querySelectorAll('#discover-grid .btn-install');
+    
+    buttons.forEach(btn => {
+        const slug = btn.dataset.slug;
+        if (!slug) return;
+        // Skip buttons that show 'Inkompatibel' or 'Lädt...'
+        if (btn.textContent.trim() === 'Inkompatibel' || btn.textContent.trim() === 'Lädt...') return;
+        
+        const isInstalled = installedMods.some(m => {
+            const fn = (m.filename || m).toLowerCase();
+            return fn.includes(slug.toLowerCase());
+        });
+        
+        if (isInstalled) {
+            btn.textContent = 'Installiert';
+            btn.disabled = true;
+        } else {
+            // File no longer exists -> allow re-install
+            btn.textContent = 'Installieren';
+            btn.disabled = false;
+        }
+    });
 }
 
 async function performSearch(offset, getProfilesData) {
     currentOffset = offset;
+    lastGetProfilesData = getProfilesData;
     const query = document.getElementById('search-input').value.trim();
     const grid = document.getElementById('discover-grid');
     const pagination = document.getElementById('discover-pagination');
@@ -100,7 +137,6 @@ function renderResults(data, getProfilesData, installedMods = []) {
         let isCompatible = true;
         let compatHint = '';
         if (profileData) {
-            // Shader & Resource Packs sind immer kompatibel (loader-unabhängig)
             if (mod.project_type === 'shader' || mod.project_type === 'resourcepack') {
                 isCompatible = true;
             } else {
@@ -117,7 +153,7 @@ function renderResults(data, getProfilesData, installedMods = []) {
 
         const isInstalled = installedMods.some(m => {
             const fn = (m.filename || m).toLowerCase();
-            return fn.includes(mod.slug.toLowerCase()) || fn.includes(mod.title.toLowerCase().replace(/ /g, '-'));
+            return fn.includes(mod.slug.toLowerCase());
         });
 
         const iconUrl = mod.icon_url || 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23242424"><rect width="24" height="24"/></svg>';
@@ -234,6 +270,24 @@ async function handleInstallClick(slug, projectType, getProfilesData, btnElement
         if (btnElement) {
             btnElement.textContent = 'Installiert';
         }
+        
+        // After a short delay, verify the file actually landed on disk
+        setTimeout(async () => {
+            const installedMods = await window.electronAPI.getInstalledMods(selectedProfile);
+            const isNowInstalled = installedMods.some(m => {
+                const fn = (m.filename || m).toLowerCase();
+                return fn.includes(slug.toLowerCase());
+            });
+            if (btnElement) {
+                if (isNowInstalled) {
+                    btnElement.textContent = 'Installiert';
+                    btnElement.disabled = true;
+                } else {
+                    btnElement.textContent = 'Installieren';
+                    btnElement.disabled = false;
+                }
+            }
+        }, 3000);
     } catch (e) {
         showToast('Installationsfehler', e.message, 'error');
         if (btnElement) {
