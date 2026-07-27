@@ -54,6 +54,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // Feature 3: Mod Conflicts
     checkModConflicts: (data) => ipcRenderer.invoke('check-mod-conflicts', data),
 
+    // P2P Networking
+    p2pFetchPublic: () => ipcRenderer.invoke('p2p-fetch-public'),
+    p2pJoin: (code) => ipcRenderer.invoke('p2p-join', { code }),
+    p2pGetInfo: (code) => ipcRenderer.invoke('p2p-get-info', { code }),
+    onP2PStatus: (callback) => ipcRenderer.on('p2p-status', callback),
+
     // Game
     startGame: (options) => ipcRenderer.send('start-minecraft', options),
     stopGame: () => ipcRenderer.send('stop-minecraft'),

@@ -7,14 +7,24 @@ const { Auth } = require('msmc');
 const AdmZip = require('adm-zip');
 const { exec } = require('child_process');
 const DiscordRPC = require('discord-rpc');
-const { autoUpdater } = require('electron-updater');
-
-const launcher = new Client();
+const Hyperswarm = require('hyperswarm');
+const crypto = require('crypto');
+const b4a = require('b4a');
+const net = require('net');
+const { autoUpdater } = require('electron-updater');const launcher = new Client();
 let mainWindow;
 let logWindow = null;
 let gameProcess = null;
 let gameStartTime = null;
 
+// ===== P2P HOSTING VARIABLES =====
+let hostSwarm = null;
+let clientSwarm = null;
+let localProxyServer = null;
+let pendingHostType = null;
+let pendingHostProfileData = null;
+let activeHostCode = null;
+const PUBLIC_SERVERS_TOPIC = crypto.createHash('sha256').update('SchleimyLauncher-PublicServers-v1').digest();
 // ===== PATHS (Feature 20: Portable Mode) =====
 const isPortable = fs.existsSync(path.join(__dirname, '.portable'));
 const baseDir = isPortable
@@ -155,6 +165,74 @@ function createWindow() {
     mainWindow.loadFile('index.html');
     mainWindow.once('ready-to-show', () => mainWindow.show());
 }
+
+ipcMain.handle('p2p-fetch-public', async () => {
+    return new Promise((resolve) => {
+        const tempSwarm = new Hyperswarm();
+        const servers = [];
+        let timer = setTimeout(() => {
+            tempSwarm.destroy();
+            resolve(servers);
+        }, 5000);
+
+        tempSwarm.on('connection', (conn) => {
+            let buffer = '';
+            conn.on('data', data => {
+                buffer += data.toString();
+                if (buffer.includes('\n')) {
+                    try {
+                        const info = JSON.parse(buffer.split('\n')[0]);
+                        if (info.type === 'server-info') servers.push({ ...info, code: crypto.createHash('sha256').update(conn.remotePublicKey).digest('hex').substring(0,6) }); // Wait, public topic peers don't use short codes.
+                    } catch(e) {}
+                    conn.destroy();
+                }
+            });
+        });
+        tempSwarm.join(PUBLIC_SERVERS_TOPIC, { server: false, client: true });
+    });
+});
+
+ipcMain.handle('p2p-get-info', async (_e, { code }) => {
+    return new Promise((resolve) => {
+        const tempSwarm = new Hyperswarm();
+        const joinTopic = crypto.createHash('sha256').update(code).digest();
+        let timer = setTimeout(() => { tempSwarm.destroy(); resolve(null); }, 8000);
+        tempSwarm.on('connection', (conn) => {
+            let buffer = '';
+            conn.on('data', data => {
+                buffer += data.toString();
+                if (buffer.includes('\n')) {
+                    try { const info = JSON.parse(buffer.split('\n')[0]); if (info.type === 'server-info') { clearTimeout(timer); tempSwarm.destroy(); resolve(info); } } catch(e) {}
+                }
+            });
+        });
+        tempSwarm.join(joinTopic, { server: false, client: true });
+    });
+});
+
+ipcMain.handle('p2p-join', async (_e, { code }) => {
+    if (clientSwarm) stopP2P();
+    return new Promise((resolve) => {
+        clientSwarm = new Hyperswarm();
+        const joinTopic = crypto.createHash('sha256').update(code).digest();
+        let connected = false;
+        let timeout = setTimeout(() => { if (!connected) { stopP2P(); resolve({ success: false, error: 'Host nicht gefunden.' }); } }, 10000);
+
+        clientSwarm.on('connection', (conn) => {
+            if (connected) { conn.destroy(); return; }
+            connected = true;
+            clearTimeout(timeout);
+            localProxyServer = net.createServer(socket => {
+                conn.write('JOIN\n');
+                socket.pipe(conn).pipe(socket);
+                socket.on('error', () => {});
+            });
+            localProxyServer.listen(25565, '127.0.0.1', () => resolve({ success: true, localPort: 25565 }));
+            localProxyServer.on('error', (err) => { stopP2P(); resolve({ success: false, error: 'Port 25565 belegt.' }); });
+        });
+        clientSwarm.join(joinTopic, { server: false, client: true });
+    });
+});
 
 app.whenReady().then(() => { 
     ensureDirs(); 
@@ -514,15 +592,86 @@ let launcherListenersReady = false;
 function ensureLauncherListeners() {
     if (launcherListenersReady) return;
     launcher.on('download', (e) => sendEvent('progress', `Download: ${e}`));
-    launcher.on('data', (e) => { const msg = String(e); sendEvent('progress', msg); sendEvent('game-log', msg, { raw: msg }); if (logWindow && !logWindow.isDestroyed()) logWindow.webContents.send('launcher-event', { type: 'game-log', data: { raw: msg } }); });
+    launcher.on('data', (e) => { 
+        const msg = String(e); 
+        sendEvent('progress', msg); 
+        sendEvent('game-log', msg, { raw: msg }); 
+        if (logWindow && !logWindow.isDestroyed()) logWindow.webContents.send('launcher-event', { type: 'game-log', data: { raw: msg } }); 
+        
+        // P2P Log Parsing
+        if (pendingHostType) {
+            const match = msg.match(/Local game hosted on port (\d+)/i) || msg.match(/Started on port (\d+)/i);
+            if (match && match[1]) {
+                const lanPort = parseInt(match[1], 10);
+                startP2PHost(lanPort, pendingHostType, pendingHostProfileData);
+                pendingHostType = null;
+            }
+        }
+    });
     launcher.on('close', (code) => { 
         const pt = gameStartTime ? Math.floor((Date.now() - gameStartTime) / 1000) : 0; 
         gameProcess = null; 
         gameStartTime = null; 
         updateDiscordRPC('Im Hauptmenü', 'Durchstöbert Modpacks');
         sendEvent('game-closed', 'Minecraft beendet.', { exitCode: code, playTimeSeconds: pt }); 
+        stopP2P();
     });
     launcherListenersReady = true;
+}
+
+// ===== P2P NETWORKING LOGIC =====
+function stopP2P() {
+    if (hostSwarm) { hostSwarm.destroy(); hostSwarm = null; }
+    if (clientSwarm) { clientSwarm.destroy(); clientSwarm = null; }
+    if (localProxyServer) { localProxyServer.close(); localProxyServer = null; }
+    pendingHostType = null;
+    pendingHostProfileData = null;
+    activeHostCode = null;
+    if (mainWindow) mainWindow.webContents.send('p2p-status', { hosting: false });
+}
+
+function startP2PHost(lanPort, type, profileData) {
+    if (hostSwarm) stopP2P();
+    hostSwarm = new Hyperswarm();
+    activeHostCode = crypto.randomBytes(3).toString('hex').toUpperCase(); // 6 chars
+    const privateTopic = crypto.createHash('sha256').update(activeHostCode).digest();
+    
+    // Read mods and generate hashes for auto-installer
+    const modsList = [];
+    try {
+        const mp = path.join(instancesDir, profileData.name, 'mods');
+        if (fs.existsSync(mp)) {
+            const files = fs.readdirSync(mp).filter(f => f.endsWith('.jar'));
+            for (const f of files) {
+                const sha1 = crypto.createHash('sha1').update(fs.readFileSync(path.join(mp, f))).digest('hex');
+                modsList.push({ filename: f, hash: sha1 });
+            }
+        }
+    } catch(e) {}
+
+    hostSwarm.on('connection', (conn, info) => {
+        // When a peer connects, send them server info
+        const serverInfo = { type: 'server-info', name: `${os.userInfo().username}'s Welt`, host: os.userInfo().username, mods: modsList, loader: profileData?.loader, mcVersion: profileData?.version };
+        conn.write(JSON.stringify(serverInfo) + '\n');
+        
+        // Wait for 'JOIN' command
+        conn.once('data', (data) => {
+            const msg = data.toString().trim();
+            if (msg === 'JOIN') {
+                const localSocket = net.connect(lanPort, '127.0.0.1');
+                conn.pipe(localSocket).pipe(conn);
+                localSocket.on('error', () => conn.destroy());
+                conn.on('error', () => localSocket.destroy());
+            }
+        });
+    });
+
+    hostSwarm.join(privateTopic, { server: true, client: false });
+    if (type === 'public') {
+        hostSwarm.join(PUBLIC_SERVERS_TOPIC, { server: true, client: false });
+    }
+    if (mainWindow) mainWindow.webContents.send('p2p-status', { hosting: true, code: activeHostCode, type });
+    sendEvent('progress', `P2P Host gestartet! Code: ${activeHostCode}`);
 }
 
 ipcMain.on('start-minecraft', async (_e, options) => {
@@ -540,6 +689,12 @@ ipcMain.on('start-minecraft', async (_e, options) => {
     const presetArgs = JVM_PRESETS[presetName] || [];
     const customArgs = profileCfg.jvmArgs ? profileCfg.jvmArgs.split(' ').filter(Boolean) : [];
     const opts = { clientPackage: null, authorization: auth, root: profilePath, version: { number: options.version, type: 'release' }, memory: { max: `${ramMB}M`, min: '1024M' }, customArgs: [...presetArgs, ...customArgs], overrides: { gameDirectory: profilePath } };
+    
+    // Auto-Connect if join proxy is active
+    if (options.isJoin) {
+        opts.customArgs.push('--server', '127.0.0.1', '--port', '25565');
+    }
+
     const javaPath = profileCfg.javaPath || settings.javaPath;
     if (javaPath) opts.javaPath = javaPath;
     try {
@@ -559,6 +714,14 @@ ipcMain.on('start-minecraft', async (_e, options) => {
         }
         gameStartTime = Date.now();
         updateDiscordRPC('Spielt Minecraft', `Profil: ${options.profileName}`, gameStartTime);
+        
+        // P2P Setup
+        if (profileCfg.hostMode === 'public' || profileCfg.hostMode === 'private') {
+            pendingHostType = profileCfg.hostMode;
+            pendingHostProfileData = profileCfg;
+            sendEvent('progress', `Warte auf LAN-Öffnung für P2P-Host (${profileCfg.hostMode})...`);
+        }
+
         gameProcess = await launcher.launch(opts);
         sendEvent('game-started', 'Spiel gestartet!', { startTime: gameStartTime });
     } catch (error) { gameProcess = null; gameStartTime = null; sendEvent('error', `Startfehler: ${error.message}`); }

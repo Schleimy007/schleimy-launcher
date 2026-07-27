@@ -3,12 +3,14 @@ import { loadProfiles, createProfile, getProfilesData } from './profiles.js';
 import { initDiscover } from './discover.js';
 import { fetchMojangVersions } from './api.js';
 import { showToast, updateToastProgress } from './toasts.js';
+import { initCommunityTab } from './community.js';
 
 let sysMemoryGB = 4;
 let isGameRunning = false;
 
 document.addEventListener('DOMContentLoaded', async () => {
     initUI();
+    initCommunityTab();
     
     // --- Setup Global Listeners ---
     setupEventListeners();
@@ -247,8 +249,9 @@ function setupEventListeners() {
         const name = document.getElementById('create-name').value.trim();
         const loader = document.getElementById('create-loader').value;
         const version = document.getElementById('create-version').value;
+        const hostMode = document.getElementById('new-inst-hostmode').value;
         
-        await createProfile(name, loader, version);
+        await createProfile(name, loader, version, hostMode);
         btn.disabled = false;
     });
 
@@ -274,11 +277,12 @@ function setupEventListeners() {
 }
 
 function setupIpcListeners() {
-    window.electronAPI.onLauncherEvent((evt) => {
+    window.electronAPI.onLauncherEvent((e, evt) => {
         const statusDisplay = document.getElementById('play-status-text');
         
         if (evt.type === 'progress') {
             statusDisplay.textContent = evt.message;
+            updateToastProgress(evt.message);
         } 
         else if (evt.type === 'game-started') {
             statusDisplay.textContent = '🚀 Spiel läuft!';
@@ -327,4 +331,12 @@ function setupIpcListeners() {
             }
         }
     });
+
+    if (window.electronAPI.onP2PStatus) {
+        window.electronAPI.onP2PStatus((e, data) => {
+            if (data.hosting) {
+                showToast('P2P Host Aktiv!', `Andere können per Code beitreten: ${data.code}`, 'success');
+            }
+        });
+    }
 }

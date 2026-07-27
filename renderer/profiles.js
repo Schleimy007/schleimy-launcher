@@ -88,13 +88,13 @@ function updatePlaySelect() {
     }
 }
 
-export async function createProfile(name, loader, version) {
+export async function createProfile(name, loader, version, hostMode = 'none') {
     if (!name || !version) {
         showToast('Fehler', 'Bitte Name und Version angeben', 'error');
         return false;
     }
     
-    const res = await window.electronAPI.createProfile({ name, loader, version });
+    const res = await window.electronAPI.createProfile({ name, loader, version, hostMode });
     if (res.success) {
         showToast('Erfolg', `Instanz ${name} erstellt`, 'success');
         closeModals();
