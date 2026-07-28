@@ -1,3 +1,4 @@
+require('dotenv').config();
 const { app, BrowserWindow, ipcMain, shell, safeStorage, dialog } = require('electron');
 const path = require('path');
 const os = require('os');
@@ -12,18 +13,20 @@ const Hyperswarm = require('hyperswarm');
 const crypto = require('crypto');
 const b4a = require('b4a');
 const net = require('net');
-const { autoUpdater } = require('electron-updater');const launcher = new Client();
+const { autoUpdater } = require('electron-updater');
+const launcher = new Client();
 
 // ===== API CONSTANTS =====
 const MODRINTH_API = 'https://api.modrinth.com/v2';
 const CF_API = 'https://api.curseforge.com/v1';
-const CF_API_KEY = '$2a$10$YIMNoFAiFmthQIR34dpIjeUmrgWIAYBE2GOnXH50JI4Y65UT5vpNe'; // <-- Ersetze diesen Wert. Dein Key ist gültig, aber der User-Agent fehlt.
+const CF_API_KEY = process.env.CF_API_KEY;
 const CF_GAME_ID = 432; // Minecraft
 const CF_HEADERS = {
     'Accept': 'application/json',
     'x-api-key': CF_API_KEY,
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'
 };
+const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID;
 const CF_CLASS = {
     mod: 6,
     modpack: 4471,
@@ -111,7 +114,7 @@ function sendEvent(type, message, data) {
 }
 
 // ===== DISCORD RPC =====
-const DISCORD_CLIENT_ID = '1531078543596060822'; // Dummy ID, replace if you have one
+const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID || '1531078543596060822';
 DiscordRPC.register(DISCORD_CLIENT_ID);
 let rpc = new DiscordRPC.Client({ transport: 'ipc' });
 let rpcReady = false;
@@ -1512,6 +1515,21 @@ ipcMain.handle('get-screenshots', (_e, pn) => {
 });
 ipcMain.handle('get-screenshot-data', (_e, fp) => { try { if (fs.existsSync(fp)) return `data:image/png;base64,${fs.readFileSync(fp).toString('base64')}`; } catch (_) {} return null; });
 ipcMain.handle('copy-screenshot', async (_e, fp) => { try { const { clipboard, nativeImage: NI } = require('electron'); clipboard.writeImage(NI.createFromPath(fp)); return { success: true }; } catch (e) { return { success: false, error: e.message }; } });
+ipcMain.handle('delete-screenshot', async (_e, filePath) => {
+    try {
+        if (fs.existsSync(filePath)) {
+            await fs.promises.unlink(filePath);
+            return { success: true };
+        }
+        return { success: false, error: 'Datei nicht gefunden.' };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+});
+ipcMain.handle('open-screenshot-folder', (_e, filePath) => {
+    if (fs.existsSync(filePath)) shell.showItemInFolder(filePath);
+    return { success: true };
+});
 
 // Feature 12: Desktop Shortcut
 ipcMain.handle('create-shortcut', async (_e, { profileName, version, loader }) => {

@@ -11,6 +11,7 @@ export function initUI() {
             item.classList.add('active');
             const target = item.getAttribute('data-tab');
             document.getElementById(`tab-${target}`).classList.add('active');
+            window.dispatchEvent(new CustomEvent('schleimy-tab-change', { detail: { target } }));
         });
     });
 

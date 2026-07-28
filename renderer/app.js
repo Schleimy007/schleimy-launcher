@@ -1,5 +1,5 @@
 import { initUI } from './ui.js';
-import { loadProfiles, createProfile, getProfilesData } from './profiles.js';
+import { loadProfiles, createProfile, getProfilesData, renderScreenshotTab } from './profiles.js';
 import { initDiscover } from './discover.js';
 import { fetchMojangVersions } from './api.js';
 import { showToast, updateToastProgress } from './toasts.js';
@@ -10,6 +10,11 @@ let isGameRunning = false;
 
 document.addEventListener('DOMContentLoaded', async () => {
     try { initUI(); } catch(e) { console.error('initUI failed:', e); }
+    window.addEventListener('schleimy-tab-change', async (e) => {
+        if (e.detail.target === 'screenshots') {
+            try { await renderScreenshotTab(); } catch (err) { console.error('renderScreenshotTab failed:', err); }
+        }
+    });
     try { initCommunityTab(); } catch(e) { console.error('initCommunityTab failed:', e); }
     
     // --- Setup Global Listeners ---
@@ -67,6 +72,9 @@ async function loadInitialData() {
         // 3. Profiles
         try {
             await loadProfiles();
+            if (document.querySelector('.nav-item.active')?.dataset.tab === 'screenshots') {
+                await renderScreenshotTab();
+            }
         } catch (e) { console.error('Profile load failed:', e); }
 
         // 4. Minecraft Versions (network, can be slow)
@@ -236,6 +244,11 @@ function setupEventListeners() {
             nameDisplay.textContent = 'Kein Profil gewählt';
             statusDisplay.textContent = 'Warte auf Auswahl...';
             playBtn.disabled = true;
+        }
+
+        const activeTab = document.querySelector('.nav-item.active')?.dataset.tab;
+        if (activeTab === 'screenshots') {
+            renderScreenshotTab();
         }
     });
 

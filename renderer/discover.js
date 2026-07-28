@@ -11,9 +11,10 @@ let currentModDetailToken = 0; // For preventing race conditions in modal
 // Simple Markdown → HTML converter for Modrinth descriptions
 function markdownToHtml(md) {
     if (!md) return '';
-    let html = md;
+    let html = md.replace(/\r\n/g, '\n');
 
     // Code blocks (```lang\n...```)
+
     html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
         const langClass = lang ? ` class="language-${lang}"` : '';
         return `<pre><code${langClass}>${code.trim()}</code></pre>`;
@@ -42,9 +43,12 @@ function markdownToHtml(md) {
     html = html.replace(/^---\s*$/gm, '<hr>');
 
     // Headings
-    html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-    html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-    html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+    html = html.replace(/^\s*######\s+(.+)$/gm, '<h6>$1</h6>');
+    html = html.replace(/^\s*#####\s+(.+)$/gm, '<h5>$1</h5>');
+    html = html.replace(/^\s*####\s+(.+)$/gm, '<h4>$1</h4>');
+    html = html.replace(/^\s*###\s+(.+)$/gm, '<h3>$1</h3>');
+    html = html.replace(/^\s*##\s+(.+)$/gm, '<h2>$1</h2>');
+    html = html.replace(/^\s*#\s+(.+)$/gm, '<h1>$1</h1>');
 
     // Blockquotes
     html = html.replace(/^> (.+)$/gm, '<blockquote><p>$1</p></blockquote>');
@@ -207,11 +211,19 @@ async function performSearch(offset, getProfilesData) {
         const source = document.getElementById('search-source')?.value || 'all';
         const selectedProfile = document.getElementById('play-profile-select').value;
         let installedMods = [];
+        let installedShaderpacks = [];
+        let installedResourcepacks = [];
         if (selectedProfile) {
             installedMods = await window.electronAPI.getInstalledMods(selectedProfile);
+            installedShaderpacks = await window.electronAPI.getShaderPacks(selectedProfile);
+            installedResourcepacks = await window.electronAPI.getResourcePacks(selectedProfile);
         }
         const data = await searchAll(query, facets, LIMIT, offset, source);
-        renderResults(data, getProfilesData, installedMods);
+        renderResults(data, getProfilesData, {
+            mods: installedMods,
+            shaderpacks: installedShaderpacks,
+            resourcepacks: installedResourcepacks
+        });
     } catch (e) {
         grid.innerHTML = `
             <div class="empty-state" style="grid-column: 1 / -1;">
@@ -224,7 +236,10 @@ async function performSearch(offset, getProfilesData) {
     }
 }
 
-function renderResults(data, getProfilesData, installedMods = []) {
+function renderResults(data, getProfilesData, installedItems = {}) {
+    const installedMods = installedItems.mods || [];
+    const installedShaderpacks = installedItems.shaderpacks || [];
+    const installedResourcepacks = installedItems.resourcepacks || [];
     const grid = document.getElementById('discover-grid');
     grid.innerHTML = '';
 
@@ -268,10 +283,13 @@ function renderResults(data, getProfilesData, installedMods = []) {
             compatHint = `<span style="color:var(--color-text-med); font-size:12px;">Kein Profil gewählt</span>`;
         }
 
-        const isInstalled = installedMods.some(m => {
-            // Primary: match by projectId (reliable — works for CurseForge + Modrinth)
+        const installedList = mod.project_type === 'shader'
+            ? installedShaderpacks
+            : mod.project_type === 'resourcepack'
+                ? installedResourcepacks
+                : installedMods;
+        const isInstalled = installedList.some(m => {
             if (m.projectId && m.projectId === mod.slug) return true;
-            // Fallback: match by filename containing slug (for legacy mods without lock entry)
             const fn = (m.filename || m).toLowerCase();
             return fn.includes(mod.slug.toLowerCase().replace('cf:', ''));
         });

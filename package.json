@@ -1,6 +1,6 @@
 {
   "name": "schleimy-launcher",
-  "version": "4.5.0",
+  "version": "5.0.0",
   "description": "Schleimy Launcher – Ein moderner Minecraft Mod-Launcher",
   "main": "main.js",
   "scripts": {
@@ -16,6 +16,7 @@
   "dependencies": {
     "b4a": "^1.8.1",
     "discord-rpc": "^4.0.1",
+    "dotenv": "^16.4.5",
     "electron-updater": "^6.8.9",
     "hyperswarm": "^4.17.0",
     "minecraft-launcher-core": "^3.18.2",

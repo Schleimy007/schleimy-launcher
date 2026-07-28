@@ -14,6 +14,99 @@ export function getProfilesData() {
     return currentProfiles;
 }
 
+function renderEmptyScreenshotState(message) {
+    return `
+        <div class="empty-state" style="height: 220px;">
+            <svg class="empty-icon" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" ry="2" fill="none" stroke="currentColor" stroke-width="2"></rect><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"></circle><polyline points="21 15 16 10 5 21" fill="none" stroke="currentColor" stroke-width="2"></polyline></svg>
+            <p style="color:var(--color-text-med);">${message}</p>
+        </div>`;
+}
+
+async function _renderScreenshotTab(profileName) {
+    const container = document.getElementById('screenshot-grid');
+    if (!container) return;
+    container.innerHTML = '<p style="padding:16px; text-align:center; color:var(--color-text-med);">Lade Screenshots...</p>';
+
+    const selectedProfile = profileName || document.getElementById('play-profile-select')?.value;
+    if (!selectedProfile) {
+        container.innerHTML = renderEmptyScreenshotState('Wähle ein Profil in der Leiste unten, um Screenshots anzuzeigen.');
+        return;
+    }
+
+    let screenshots = [];
+    try {
+        screenshots = await window.electronAPI.getScreenshots(selectedProfile);
+    } catch (err) {
+        console.error('Screenshot fetch failed:', err);
+        container.innerHTML = renderEmptyScreenshotState('Fehler beim Laden der Screenshots.');
+        return;
+    }
+
+    if (!screenshots || screenshots.length === 0) {
+        container.innerHTML = renderEmptyScreenshotState('Keine Screenshots gefunden.');
+        return;
+    }
+
+    const grid = document.createElement('div');
+    grid.className = 'screenshot-grid';
+    screenshots.forEach(ss => grid.appendChild(createScreenshotItem(ss, () => _renderScreenshotTab(selectedProfile))));
+    container.innerHTML = '';
+    container.appendChild(grid);
+}
+
+function createScreenshotItem(ss, refreshFn) {
+    const item = document.createElement('div');
+    item.className = 'screenshot-item';
+    const imageUrl = `file:///${encodeURI(ss.path.replace(/\\/g, '/'))}`;
+
+    item.innerHTML = `
+        <img src="${imageUrl}" alt="${ss.filename}" loading="lazy">
+        <div class="screenshot-actions">
+            <button class="btn btn-icon btn-secondary btn-action-copy" title="In Zwischenablage kopieren">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+            </button>
+            <button class="btn btn-icon btn-secondary btn-action-open" title="Im Ordner anzeigen">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+            </button>
+            <button class="btn btn-icon btn-danger btn-action-delete" title="Löschen">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+            </button>
+        </div>
+    `;
+
+    item.querySelector('.btn-action-copy').addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const res = await window.electronAPI.copyScreenshot(ss.path);
+        if (res.success) showToast('Erfolg', 'Screenshot kopiert!', 'success');
+        else showToast('Fehler', res.error, 'error');
+    });
+
+    item.querySelector('.btn-action-open').addEventListener('click', (e) => {
+        e.stopPropagation();
+        window.electronAPI.openScreenshotFolder(ss.path);
+    });
+
+    item.querySelector('.btn-action-delete').addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (confirm(`Screenshot "${ss.filename}" wirklich löschen? Diese Aktion kann nicht rückgängig gemacht werden.`)) {
+            const res = await window.electronAPI.deleteScreenshot(ss.path);
+            if (res.success) {
+                showToast('Gelöscht', 'Screenshot wurde entfernt.', 'info');
+                if (typeof refreshFn === 'function') refreshFn();
+                else item.remove();
+            } else {
+                showToast('Fehler', res.error, 'error');
+            }
+        }
+    });
+
+    return item;
+}
+
+export async function renderScreenshotTab(profileName) {
+    return _renderScreenshotTab(profileName);
+}
+
 function renderProfiles() {
     const grid = document.getElementById('instances-grid');
     grid.innerHTML = '';
@@ -58,7 +151,6 @@ function renderProfiles() {
         
         card.addEventListener('click', (e) => {
             if (e.target.closest('.btn-play-quick')) {
-                // Set as active and click play (handled in app.js)
                 document.getElementById('play-profile-select').value = name;
                 document.getElementById('play-profile-select').dispatchEvent(new Event('change'));
                 document.getElementById('btn-play').click();
@@ -100,7 +192,6 @@ export async function createProfile(name, loader, version, hostMode = 'none') {
         closeModals();
         await loadProfiles();
         
-        // Auto-select new profile
         document.getElementById('play-profile-select').value = name;
         document.getElementById('play-profile-select').dispatchEvent(new Event('change'));
         
@@ -112,17 +203,14 @@ export async function createProfile(name, loader, version, hostMode = 'none') {
     }
 }
 
-// Instance details / Mod management
 let currentActiveInstance = null;
 
 async function openInstanceDetails(name) {
     currentActiveInstance = name;
     const modal = document.getElementById('modal-instance');
-    openInstanceModal(name); // from ui.js
+    openInstanceModal(name);
     
-    // Setup tab switching
     modal.querySelectorAll('.tab-header').forEach(header => {
-        // Remove old listeners to avoid duplicates
         const newHeader = header.cloneNode(true);
         header.parentNode.replaceChild(newHeader, header);
         
@@ -146,14 +234,13 @@ async function openInstanceDetails(name) {
     await renderInstalledMods(name);
     await renderAddons(name, 'inst-shaders-list', 'getShaderPacks', 'toggleShaderPack', 'deleteShaderPack', 'Keine Shaders installiert.');
     await renderAddons(name, 'inst-rp-list', 'getResourcePacks', 'toggleResourcePack', 'deleteResourcePack', 'Keine Resource Packs installiert.');
-    await renderScreenshots(name); // NEU: Screenshots Tab
+    await renderScreenshots(name);
 }
 
 async function renderAddons(profileName, listId, getIpc, toggleIpc, deleteIpc, emptyMsg) {
     const list = document.getElementById(listId);
     list.innerHTML = '<p style="padding:8px; text-align:center; color:var(--color-text-med);">Lade...</p>';
     
-    // window.electronAPI[getIpc]
     const items = await window.electronAPI[getIpc](profileName);
     list.innerHTML = '';
     
@@ -221,15 +308,14 @@ async function renderInstalledMods(name) {
     
     const profileData = currentProfiles[name];
     
-    // Check for updates in background
     let updates = [];
     if (profileData) {
         window.electronAPI.checkModUpdates({ profileName: name, loader: profileData.loader, mcVersion: profileData.version })
             .then(upd => {
                 updates = upd || [];
-                // Now update the UI for each mod that has an update
                 updates.forEach(u => {
-                    const updateBtn = list.querySelector(`[data-update-file="${CSS.escape(u.currentFile)}"]`);
+                    const safeName = u.currentFile.replace(/[^a-zA-Z0-9_\-\.]/g, '_');
+                    const updateBtn = list.querySelector(`[data-update-file="${safeName}"]`);
                     if (updateBtn) {
                         updateBtn.style.display = 'inline-block';
                         updateBtn.title = `${u.currentVersion} → ${u.latestVersion}`;
@@ -272,7 +358,7 @@ async function renderInstalledMods(name) {
                 currentFile: upd.currentFile,
                 downloadUrl: upd.downloadUrl,
                 newFilename: upd.newFilename,
-                newMeta: upd.newMeta // Pass new metadata to update lock file
+                newMeta: upd.newMeta
             });
             if (res.success) {
                 showToast('Update', `${mod.displayName} aktualisiert!`, 'success');
@@ -310,94 +396,185 @@ async function renderInstalledMods(name) {
 
 async function renderScreenshots(name) {
     const list = document.getElementById('inst-gallery-list');
-    list.innerHTML = '<p style="padding:8px; text-align:center; color:var(--color-text-med);">Lade Screenshots...</p>';
+    list.innerHTML = '<p style="padding:16px; text-align:center; color:var(--color-text-med);">Lade Screenshots...</p>';
 
-    const screenshots = await window.electronAPI.getScreenshots(name);
+    let screenshots = [];
+    try {
+        screenshots = await window.electronAPI.getScreenshots(name);
+    } catch (err) {
+        console.error('Screenshot load failed:', err);
+        list.innerHTML = renderEmptyScreenshotState('Fehler beim Laden der Screenshots.');
+        return;
+    }
+
     list.innerHTML = '';
-
-    if (screenshots.length === 0) {
-        list.innerHTML = '<p style="padding:16px; text-align:center; color:var(--color-text-med);">Keine Screenshots gefunden.</p>';
+    if (!screenshots || screenshots.length === 0) {
+        list.innerHTML = renderEmptyScreenshotState('Keine Screenshots gefunden.');
         return;
     }
 
     const grid = document.createElement('div');
-    grid.className = 'gallery-grid';
-
-    screenshots.forEach(ss => {
-        const item = document.createElement('div');
-        item.className = 'gallery-item';
-        item.style.cursor = 'pointer';
-
-        const img = document.createElement('img');
-        img.src = `file://${ss.path}`; // Electron can load local files directly
-        img.alt = ss.filename;
-        item.appendChild(img);
-
-        const overlay = document.createElement('div');
-        overlay.className = 'gallery-item-overlay';
-        overlay.textContent = new Date(ss.date).toLocaleDateString();
-        item.appendChild(overlay);
-
-        item.addEventListener('click', async () => {
-            // Optionally, open a larger view or copy to clipboard
-            if (confirm(`Screenshot ${ss.filename} in Zwischenablage kopieren?`)) {
-                const res = await window.electronAPI.copyScreenshot(ss.path);
-                if (res.success) {
-                    showToast('Erfolg', 'Screenshot kopiert!', 'success');
-                } else {
-                    showToast('Fehler', res.error, 'error');
-                }
-            }
-        });
-
-        grid.appendChild(item);
-    });
-
+    grid.className = 'screenshot-grid';
+    screenshots.forEach(ss => grid.appendChild(createScreenshotItem(ss, () => renderScreenshots(name))));
     list.appendChild(grid);
 }
 
-// Event listeners for instance actions (already existing, just for context)
-// ...
-document.getElementById('btn-inst-folder').addEventListener('click', () => {
-    if (currentActiveInstance) window.electronAPI.openProfileFolder(currentActiveInstance);
-});
+function openDuplicateModal() {
+    const modal = document.getElementById('modal-duplicate');
+    const input = document.getElementById('duplicate-name-input');
+    if (!modal || !input || !currentActiveInstance) return;
 
-document.getElementById('btn-inst-export').addEventListener('click', async () => {
-    if (currentActiveInstance) {
-        showToast('Export', 'Profil wird komprimiert...', 'info');
-        const res = await window.electronAPI.exportProfile(currentActiveInstance);
-        if (res.success) {
-            showToast('Erfolg', `Profil ${currentActiveInstance} erfolgreich exportiert`, 'success');
-        } else if (!res.canceled) {
-            showToast('Fehler', res.error, 'error');
-        }
+    closeModals();
+    input.value = `${currentActiveInstance} (Kopie)`;
+    modal.classList.add('active');
+    window.requestAnimationFrame(() => {
+        input.focus();
+        input.setSelectionRange(0, input.value.length);
+    });
+}
+
+function closeDuplicateModal() {
+    const modal = document.getElementById('modal-duplicate');
+    if (!modal) return;
+    modal.classList.remove('active');
+}
+
+async function confirmDuplicateInstance() {
+    const input = document.getElementById('duplicate-name-input');
+    const duplicateButton = document.getElementById('btn-duplicate-confirm');
+    if (!input || !duplicateButton || !currentActiveInstance) return;
+
+    const trimmedNewName = input.value?.trim();
+    if (!trimmedNewName) {
+        showToast('Fehler', 'Bitte gib einen Namen für die neue Instanz ein.', 'error');
+        input.focus();
+        return;
     }
-});
 
-document.getElementById('btn-inst-delete').addEventListener('click', async () => {
-    if (currentActiveInstance && confirm(`Instanz ${currentActiveInstance} wirklich inkl. aller Mods und Welten löschen?`)) {
-        const res = await window.electronAPI.deleteProfile(currentActiveInstance);
+    if (getProfilesData()[trimmedNewName]) {
+        showToast('Fehler', `Ein Profil mit dem Namen "${trimmedNewName}" existiert bereits.`, 'error');
+        input.focus();
+        return;
+    }
+
+    duplicateButton.disabled = true;
+    const originalText = duplicateButton.textContent;
+    duplicateButton.textContent = 'Dupliziere...';
+
+    try {
+        const res = await window.electronAPI.duplicateProfile({ source: currentActiveInstance, newName: trimmedNewName });
         if (res.success) {
-            showToast('Gelöscht', `Instanz ${currentActiveInstance} gelöscht`, 'success');
-            closeModals();
+            showToast('Erfolg', `Profil wurde zu "${trimmedNewName}" dupliziert.`, 'success');
+            closeDuplicateModal();
             await loadProfiles();
         } else {
             showToast('Fehler', res.error, 'error');
         }
+    } finally {
+        duplicateButton.disabled = false;
+        duplicateButton.textContent = originalText;
     }
-});
+}
 
-document.getElementById('btn-import-instance')?.addEventListener('click', async () => {
-    showToast('Import', 'Wähle eine ZIP-Datei aus...', 'info');
-    const res = await window.electronAPI.importProfile();
-    if (res.success) {
-        showToast('Erfolg', `Profil ${res.newName} erfolgreich importiert`, 'success');
-        await loadProfiles();
-        
-        // Auto-select new profile
-        document.getElementById('play-profile-select').value = res.newName;
-        document.getElementById('play-profile-select').dispatchEvent(new Event('change'));
-    } else if (!res.canceled) {
-        showToast('Fehler', res.error, 'error');
+function onDomReady(fn) {
+    if (document.readyState !== 'loading') {
+        fn();
+    } else {
+        document.addEventListener('DOMContentLoaded', fn);
     }
+}
+
+// ===== WICHTIG: DOMContentLoaded wrapper damit module-level nicht crasht =====
+onDomReady(() => {
+    document.getElementById('btn-inst-folder')?.addEventListener('click', () => {
+        if (currentActiveInstance) window.electronAPI.openProfileFolder(currentActiveInstance);
+    });
+
+    document.getElementById('btn-inst-export')?.addEventListener('click', async () => {
+        if (currentActiveInstance) {
+            showToast('Export', 'Profil wird komprimiert...', 'info');
+            const res = await window.electronAPI.exportProfile(currentActiveInstance);
+            if (res.success) {
+                showToast('Erfolg', `Profil ${currentActiveInstance} erfolgreich exportiert`, 'success');
+            } else if (!res.canceled) {
+                showToast('Fehler', res.error, 'error');
+            }
+        }
+    });
+
+    document.getElementById('btn-inst-export-mrpack')?.addEventListener('click', async () => {
+        if (currentActiveInstance) {
+            showToast('Export (.mrpack)', 'Exportiere als Modrinth Pack...', 'info');
+            const res = await window.electronAPI.exportMrpack({
+                name: currentActiveInstance,
+                packName: currentActiveInstance,
+                packVersion: '1.0.0',
+                packDescription: `Schleimy Launcher Export: ${currentActiveInstance}`
+            });
+            if (res.success) {
+                showToast('Erfolg', `Profil ${currentActiveInstance} als .mrpack exportiert`, 'success');
+            } else if (!res.canceled) {
+                showToast('Fehler', res.error, 'error');
+            }
+        }
+    });
+
+    document.getElementById('btn-inst-duplicate')?.addEventListener('click', () => {
+        openDuplicateModal();
+    });
+
+    document.getElementById('btn-duplicate-close')?.addEventListener('click', () => {
+        closeDuplicateModal();
+        const instanceModal = document.getElementById('modal-instance');
+        if (instanceModal) instanceModal.classList.add('active');
+    });
+
+    document.getElementById('btn-duplicate-cancel')?.addEventListener('click', () => {
+        closeDuplicateModal();
+        const instanceModal = document.getElementById('modal-instance');
+        if (instanceModal) instanceModal.classList.add('active');
+    });
+
+    document.getElementById('btn-duplicate-confirm')?.addEventListener('click', async () => {
+        await confirmDuplicateInstance();
+    });
+
+    document.getElementById('duplicate-name-input')?.addEventListener('keydown', async (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            await confirmDuplicateInstance();
+        }
+        if (e.key === 'Escape') {
+            closeDuplicateModal();
+            const instanceModal = document.getElementById('modal-instance');
+            if (instanceModal) instanceModal.classList.add('active');
+        }
+    });
+
+    document.getElementById('btn-inst-delete')?.addEventListener('click', async () => {
+        if (currentActiveInstance && confirm(`Instanz ${currentActiveInstance} wirklich inkl. aller Mods und Welten löschen?`)) {
+            const res = await window.electronAPI.deleteProfile(currentActiveInstance);
+            if (res.success) {
+                showToast('Gelöscht', `Instanz ${currentActiveInstance} gelöscht`, 'success');
+                closeModals();
+                await loadProfiles();
+            } else {
+                showToast('Fehler', res.error, 'error');
+            }
+        }
+    });
+
+    document.getElementById('btn-import-instance')?.addEventListener('click', async () => {
+        showToast('Import', 'Wähle eine ZIP-Datei aus...', 'info');
+        const res = await window.electronAPI.importProfile();
+        if (res.success) {
+            showToast('Erfolg', `Profil ${res.newName} erfolgreich importiert`, 'success');
+            await loadProfiles();
+            
+            document.getElementById('play-profile-select').value = res.newName;
+            document.getElementById('play-profile-select').dispatchEvent(new Event('change'));
+        } else if (!res.canceled) {
+            showToast('Fehler', res.error, 'error');
+        }
+    });
 });
