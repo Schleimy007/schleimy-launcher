@@ -68,17 +68,27 @@ export function setupFeatures() {
             const profiles = getProfilesData();
             const pData = profiles[profileName];
             if (!pData) { showToast('Fehler', 'Profil nicht gefunden.', 'error'); return; }
-            showToast('Konflikte', 'Prüfe auf Konflikte & fehlende Abhängigkeiten...', 'info');
-            const result = await window.electronAPI.checkModConflicts({ profileName, loader: pData.loader, mcVersion: pData.version });
-            const total = (result.conflicts?.length || 0) + (result.missing?.length || 0);
-            if (total > 0) {
-                let msg = '';
-                if (result.conflicts?.length) msg += `${result.conflicts.length} Konflikt(e): ${result.conflicts.map(c => c.message).join(', ')}. `;
-                if (result.missing?.length) msg += `${result.missing.length} fehlende Abhängigkeit(en): ${result.missing.map(m => m.projectName).join(', ')}.`;
-                showToast('Konflikte gefunden!', msg, 'error');
-            } else {
-                showToast('Alles OK!', 'Keine Konflikte oder fehlende Abhängigkeiten gefunden.', 'success');
+            showToast('Konflikte', 'Prüfe und behebe Konflikte sowie fehlende Abhängigkeiten...', 'info');
+            const result = await window.electronAPI.fixModConflicts({ profileName, loader: pData.loader, mcVersion: pData.version });
+            const totalIssues = (result.conflicts?.length || 0) + (result.missing?.length || 0);
+            if (totalIssues === 0 && result.installed.length === 0 && result.updated.length === 0 && result.disabled.length === 0 && (!result.activated || result.activated.length === 0)) {
+                showToast('Alles OK!', 'Keine Konflikte gefunden und keine Änderungen notwendig.', 'success');
+                return;
             }
+
+            let msg = '';
+            if (result.conflicts?.length) msg += `${result.conflicts.length} Konflikt(e) gefunden. `;
+            if (result.disabled.length) msg += `${result.disabled.length} problematische(n) Mod(s) deaktiviert. `;
+            if (result.activated?.length) msg += `${result.activated.length} deaktivierte Abhängigkeit(en) aktiviert: ${result.activated.join(', ')}. `;
+            if (result.installed.length) msg += `${result.installed.length} fehlende Abhängigkeit(en) installiert: ${result.installed.join(', ')}. `;
+            if (result.missing?.length) msg += `${result.missing.length} Abhängigkeit(en) nicht auf APIs gefunden: ${result.missing.map(m => m.projectName || m.projectId).join(', ')}. `;
+            if (result.updated.length) msg += `${result.updated.length} inkompatible(n) Mod(s) aktualisiert: ${result.updated.join(', ')}. `;
+            if (result.errors.length) {
+                const errorSummary = result.errors.slice(0, 3).join(' | ');
+                msg += `Fehler: ${errorSummary}`;
+            }
+
+            showToast('Konflikte geprüft', msg.trim(), result.errors.length ? 'error' : 'success');
         });
     }
 
@@ -177,19 +187,32 @@ export function setupFeatures() {
     }
 
     // 7. Performance Monitor (Interval)
-    setInterval(async () => {
-        try {
-            const perf = await window.electronAPI.getPerformance();
-            const cpuEl = document.getElementById('perf-cpu');
-            const ramEl = document.getElementById('perf-ram');
-            if (cpuEl && ramEl && perf) {
-                cpuEl.innerText = `${Math.round(perf.cpu)}%`;
-                ramEl.innerText = `${Math.round(perf.ram)} MB`;
+    let perfInterval = null;
+
+    window.addEventListener('schleimy-tab-change', (e) => {
+        if (e.detail.target === 'settings') {
+            if (!perfInterval) {
+                perfInterval = setInterval(async () => {
+                    try {
+                        const perf = await window.electronAPI.getPerformance();
+                        const cpuEl = document.getElementById('perf-cpu');
+                        const ramEl = document.getElementById('perf-ram');
+                        if (cpuEl && ramEl && perf) {
+                            cpuEl.innerText = `${Math.round(perf.cpu)}%`;
+                            ramEl.innerText = `${Math.round(perf.ram)} MB`;
+                        }
+                    } catch (err) {
+                        // ignorieren
+                    }
+                }, 2000);
             }
-        } catch (e) {
-            // ignore
+        } else {
+            if (perfInterval) {
+                clearInterval(perfInterval);
+                perfInterval = null;
+            }
         }
-    }, 2000);
+    });
 }
 
 // Call automatically

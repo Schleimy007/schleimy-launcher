@@ -1,12 +1,43 @@
 import { initUI } from './ui.js';
-import { loadProfiles, createProfile, getProfilesData, renderScreenshotTab } from './profiles.js';
+import { loadProfiles, createProfile, getProfilesData, renderScreenshotTab, renderInstalledMods, renderAddons } from './profiles.js';
 import { initDiscover } from './discover.js';
-import { fetchMojangVersions } from './api.js';
+import { fetchMojangVersions, updateAllVersionSelects } from './api.js';
 import { showToast, updateToastProgress } from './toasts.js';
 import { initCommunityTab } from './community.js';
+import { initNewFeatures } from './new_features.js';
 
 let sysMemoryGB = 4;
 let isGameRunning = false;
+let currentSettings = {};
+
+function applyBackgroundImage(path) {
+    const body = document.body;
+    if (!body) return;
+    if (!path) {
+        body.style.backgroundImage = 'radial-gradient(circle at top left, rgba(29, 212, 167, 0.12), transparent 22%), radial-gradient(circle at bottom right, rgba(91, 140, 255, 0.1), transparent 24%)';
+        body.style.backgroundSize = 'cover';
+        body.style.backgroundRepeat = 'no-repeat';
+        body.style.backgroundPosition = 'center center';
+        body.style.setProperty('--background-dim', 'rgba(15, 17, 24, 0.68)');
+        return;
+    }
+    const imageUrl = path.startsWith('file://') ? path : `file://${path.replace(/\\/g, '/')}`;
+    body.style.backgroundImage = `linear-gradient(rgba(12, 15, 23, 0.55), rgba(12, 15, 23, 0.55)), url('${imageUrl}')`;
+    body.style.backgroundSize = 'cover';
+    body.style.backgroundRepeat = 'no-repeat';
+    body.style.backgroundPosition = 'center center';
+    body.style.setProperty('--background-dim', 'rgba(12, 15, 23, 0.55)');
+}
+
+function updateBackgroundSettingsUI(path) {
+    const pathInput = document.getElementById('setting-background-path');
+    const preview = document.getElementById('background-preview');
+    if (pathInput) pathInput.value = path || '';
+    if (preview) {
+        preview.style.backgroundImage = path ? `url('file://${path.replace(/\\/g, '/')}')` : 'none';
+        preview.textContent = path ? '' : 'Kein Bild ausgewählt';
+    }
+}
 
 document.addEventListener('DOMContentLoaded', async () => {
     try { initUI(); } catch(e) { console.error('initUI failed:', e); }
@@ -20,6 +51,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // --- Setup Global Listeners ---
     try { setupEventListeners(); } catch(e) { console.error('setupEventListeners failed:', e); }
     try { setupIpcListeners(); } catch(e) { console.error('setupIpcListeners failed:', e); }
+    try { initNewFeatures(); } catch(e) { console.error('initNewFeatures failed:', e); }
 
     // --- Initial Data Load ---
     await loadInitialData();
@@ -51,6 +83,7 @@ async function loadInitialData() {
         let settings = {};
         try {
             settings = await window.electronAPI.getSettings() || {};
+            currentSettings = settings;
             sysMemoryGB = await window.electronAPI.getSystemMemory() || 4;
             
             const ramSlider = document.getElementById('setting-ram');
@@ -67,6 +100,12 @@ async function loadInitialData() {
                 const javaInput = document.getElementById('setting-java');
                 if (javaInput) javaInput.value = settings.javaPath;
             }
+            if (settings.backgroundImage) {
+                applyBackgroundImage(settings.backgroundImage);
+            } else {
+                applyBackgroundImage(null);
+            }
+            updateBackgroundSettingsUI(settings.backgroundImage);
         } catch (e) { console.error('Settings load failed:', e); }
 
         // 3. Profiles
@@ -174,7 +213,6 @@ async function initSetupWizard() {
                 source: item.dataset.source
             });
         }
-        
         await loadProfiles();
         finishSetup();
     };
@@ -208,16 +246,7 @@ function updateAuthUI(auth) {
 }
 
 function populateVersionSelects(versions) {
-    const createSel = document.getElementById('create-version');
-    const filterSel = document.getElementById('filter-version');
-    
-    createSel.innerHTML = '';
-    filterSel.innerHTML = '<option value="">Alle Versionen</option>';
-
-    versions.filter(v => v.type === 'release').forEach(v => {
-        createSel.innerHTML += `<option value="${v.id}">${v.id}</option>`;
-        filterSel.innerHTML += `<option value="${v.id}">${v.id}</option>`;
-    });
+    updateAllVersionSelects(versions);
 }
 
 function setupEventListeners() {
@@ -322,13 +351,28 @@ function setupEventListeners() {
         ramVal.textContent = `${ramSlider.value} GB`;
     });
 
+    document.getElementById('btn-choose-background')?.addEventListener('click', async () => {
+        const selectedPath = await window.electronAPI.chooseBackgroundImage();
+        if (!selectedPath) return;
+        currentSettings.backgroundImage = selectedPath;
+        applyBackgroundImage(selectedPath);
+        updateBackgroundSettingsUI(selectedPath);
+    });
+
+    document.getElementById('btn-clear-background')?.addEventListener('click', () => {
+        currentSettings.backgroundImage = '';
+        applyBackgroundImage(null);
+        updateBackgroundSettingsUI('');
+    });
+
     document.getElementById('btn-save-settings').addEventListener('click', async () => {
         const btn = document.getElementById('btn-save-settings');
         btn.disabled = true;
         
         await window.electronAPI.saveSettings({
             ram: parseInt(document.getElementById('setting-ram').value),
-            javaPath: document.getElementById('setting-java').value.trim()
+            javaPath: document.getElementById('setting-java').value.trim(),
+            backgroundImage: currentSettings.backgroundImage || ''
         });
         
         showToast('Erfolg', 'Einstellungen gespeichert', 'success');
@@ -389,22 +433,61 @@ function setupIpcListeners() {
             btn.innerHTML = `<svg viewBox="0 0 24 24" style="width:20px;height:20px;fill:currentColor;"><path d="M8 5v14l11-7z"/></svg> SPIELEN`;
         }
         else if (evt.type === 'download-progress') {
-            // Check if we have progress percentage
-            const safeName = evt.data.fileName.replace(/[^a-zA-Z0-9]/g, '-');
-            if (evt.data.progress !== undefined) {
+            const safeName = evt.data?.fileName ? evt.data.fileName.replace(/[^a-zA-Z0-9]/g, '-') : 'download';
+            if (evt.data.progress !== undefined && evt.data.progress >= 100) {
+                showToast(`Abgeschlossen`, `${evt.data.fileName} installiert`, 'success', safeName);
+            } else if (evt.data.progress !== undefined) {
                 showToast(`Download: ${evt.data.fileName}`, evt.message, 'progress', safeName);
                 updateToastProgress(safeName, evt.data.progress);
             } else {
-                showToast(`Download: ${evt.data.fileName}`, evt.message, 'info');
+                showToast(`Download: ${evt.data.fileName}`, evt.message, 'info', safeName);
             }
+        }
+        else if (evt.type === 'download-complete') {
+            const safeName = evt.data?.fileName ? evt.data.fileName.replace(/[^a-zA-Z0-9]/g, '-') : 'download';
+            showToast(`Abgeschlossen`, `${evt.data.fileName} installiert`, 'success', safeName);
+        }
+        else if (evt.type === 'download-error') {
+            const safeName = evt.data?.fileName ? evt.data.fileName.replace(/[^a-zA-Z0-9]/g, '-') : 'download';
+            showToast(`Fehler`, `${evt.data.fileName}: ${evt.data.error || 'Download fehlgeschlagen'}`, 'error', safeName);
         }
         else if (evt.type === 'success') {
             const safeName = evt.data?.fileName ? evt.data.fileName.replace(/[^a-zA-Z0-9]/g, '-') : null;
             if (safeName) {
-                // Change progress toast to success
                 showToast(`Abgeschlossen`, evt.message, 'success', safeName);
             } else {
                 showToast('Erfolg', evt.message, 'success');
+            }
+
+            // Live-update active profile modal lists if open (debounced to prevent UI freeze during multi-mod installs)
+            const activeProfileName = document.getElementById('inst-detail-name')?.textContent;
+            const isModalOpen = document.getElementById('modal-instance')?.classList.contains('active');
+            if (activeProfileName && (isModalOpen || activeProfileName === evt.data?.profileName)) {
+                if (window._liveUpdateTimeout) clearTimeout(window._liveUpdateTimeout);
+                window._liveUpdateTimeout = setTimeout(() => {
+                    const targetDir = evt.data?.targetDir || 'mods';
+                    if (targetDir === 'mods') {
+                        renderInstalledMods(activeProfileName);
+                    } else if (targetDir === 'shaderpacks') {
+                        renderAddons(activeProfileName, 'inst-shaders-list', 'getShaderPacks', 'toggleShaderPack', 'deleteShaderPack', 'Keine Shaders installiert.');
+                    } else if (targetDir === 'resourcepacks') {
+                        renderAddons(activeProfileName, 'inst-rp-list', 'getResourcePacks', 'toggleResourcePack', 'deleteResourcePack', 'Keine Resource Packs installiert.');
+                    }
+                }, 250);
+            }
+
+            // Live-update install buttons in discover grid and mod detail modal
+            if (evt.data?.projectId) {
+                const cardBtn = document.querySelector(`#discover-grid .btn-install[data-slug="${evt.data.projectId}"]`);
+                if (cardBtn) {
+                    cardBtn.textContent = 'Installiert';
+                    cardBtn.disabled = true;
+                }
+                const modalBtn = document.getElementById('btn-mod-detail-install');
+                if (modalBtn && modalBtn.dataset.modalSlug === evt.data.projectId) {
+                    modalBtn.innerHTML = '<svg viewBox="0 0 24 24" style="width: 16px; height: 16px; margin-right: 8px; vertical-align: text-bottom; display: inline-block;"><path d="M20 6L9 17l-5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Installiert';
+                    modalBtn.disabled = true;
+                }
             }
         }
         else if (evt.type === 'info') {

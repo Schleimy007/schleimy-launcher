@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { app, BrowserWindow, ipcMain, shell, safeStorage, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, safeStorage, dialog, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
 const os = require('os');
 const { fetch } = require('undici');
@@ -39,6 +39,42 @@ const CF_LOADER = {
     neoforge: 6,
     quilt: 5,
 };
+
+// ===== GLOBAL ERROR PROTECTION (ANTI-CRASH) =====
+process.on('uncaughtException', (err) => {
+    console.error('[SCHLEIMY ANTI-CRASH] Uncaught Exception:', err);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        try {
+            mainWindow.webContents.send('toast-notification', {
+                type: 'error',
+                message: `Hintergrund-Fehler abgefangen: ${err.message || 'Unbekannter Fehler'}`
+            });
+        } catch (_) {}
+    }
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('[SCHLEIMY ANTI-CRASH] Unhandled Rejection:', reason);
+});
+
+// ===== IN-MEMORY API CACHE (5-MIN TTL) =====
+const API_CACHE = new Map();
+const CACHE_TTL_MS = 5 * 60 * 1000;
+async function fetchCachedJSON(url, options = {}, ttl = CACHE_TTL_MS) {
+    const cacheKey = url + JSON.stringify(options);
+    const cached = API_CACHE.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp < ttl)) {
+        return cached.data;
+    }
+    const res = await fetch(url, options);
+    if (!res.ok) {
+        throw new Error(`API error ${res.status}: ${res.statusText}`);
+    }
+    const data = await res.json();
+    API_CACHE.set(cacheKey, { timestamp: Date.now(), data });
+    return data;
+}
+
 let mainWindow;
 let logWindow = null;
 let gameProcess = null;
@@ -64,6 +100,7 @@ const authEncPath = path.join(baseDir, 'auth.dat');
 const authPlainPath = path.join(baseDir, 'auth.json');
 const accountsPath = path.join(baseDir, 'accounts.json');
 const serversPath = path.join(baseDir, 'servers.json');
+const statsPath = path.join(baseDir, 'stats.json');
 const javaDir = path.join(baseDir, 'java');
 
 // ===== PERSISTENCE HELPERS =====
@@ -77,10 +114,24 @@ function loadJSON(filePath, fallback) {
     return typeof fallback === 'function' ? fallback() : JSON.parse(JSON.stringify(fallback));
 }
 function saveJSON(filePath, data) { fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8'); }
-function loadProfiles() { return loadJSON(profilesPath, {}); }
+function loadProfiles() {
+    const profiles = loadJSON(profilesPath, {});
+    const cleaned = {};
+    let dirty = false;
+    for (const [name, data] of Object.entries(profiles)) {
+        const profilePath = path.join(instancesDir, name);
+        if (fs.existsSync(profilePath)) {
+            cleaned[name] = data;
+        } else {
+            dirty = true;
+        }
+    }
+    if (dirty) saveProfiles(cleaned);
+    return cleaned;
+}
 function saveProfiles(profiles) { saveJSON(profilesPath, profiles); }
 function loadSettings() {
-    const defaults = { setupCompleted: false, ram: 4, javaPath: '', showSnapshots: false, theme: 'jade', accentColor: '#00AF5C', jvmPreset: 'default', discordRPC: true, parallelDownloads: 4 };
+    const defaults = { setupCompleted: false, ram: 4, javaPath: '', showSnapshots: false, theme: 'jade', accentColor: '#00AF5C', jvmPreset: 'default', discordRPC: true, parallelDownloads: 4, backgroundImage: '' };
     return { ...defaults, ...loadJSON(settingsPath, {}) };
 }
 function saveSettingsFile(settings) { const current = loadSettings(); saveJSON(settingsPath, { ...current, ...settings }); }
@@ -88,6 +139,18 @@ function loadAccounts() { return loadJSON(accountsPath, []); }
 function saveAccounts(accounts) { saveJSON(accountsPath, accounts); }
 function loadServers() { return loadJSON(serversPath, []); }
 function saveServers(servers) { saveJSON(serversPath, servers); }
+function loadStats() { return loadJSON(statsPath, {}); }
+function saveStats(stats) { saveJSON(statsPath, stats); }
+function recordPlaytimeForProfile(profileName, seconds) {
+    if (!profileName || typeof seconds !== 'number' || seconds <= 0) return;
+    const stats = loadStats();
+    const current = stats[profileName] || { playSeconds: 0, sessions: 0, lastPlayed: null };
+    current.playSeconds += seconds;
+    current.sessions += 1;
+    current.lastPlayed = new Date().toISOString();
+    stats[profileName] = current;
+    saveStats(stats);
+}
 
 // ===== AUTH =====
 function saveAuthToken(token) {
@@ -114,7 +177,6 @@ function sendEvent(type, message, data) {
 }
 
 // ===== DISCORD RPC =====
-const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID || '1531078543596060822';
 DiscordRPC.register(DISCORD_CLIENT_ID);
 let rpc = new DiscordRPC.Client({ transport: 'ipc' });
 let rpcReady = false;
@@ -160,6 +222,148 @@ const JVM_PRESETS = {
     shenandoah: ['-XX:+UseShenandoahGC','-XX:ShenandoahGCHeuristics=compact']
 };
 
+// ===== JAR PARSING HELPERS (for dependency detection) =====
+function simpleParseModsToml(content) {
+    const modIds = [];
+    const dependencies = {};
+    let currentSection = 'top';
+    let currentDepSection = null;
+    let currentDep = null;
+    for (const line of content.split('\n')) {
+        let t = line.split('#')[0].trim();
+        if (!t) continue;
+        const sec = t.match(/^\[\[(.+)\]\]$/);
+        if (sec) {
+            const sn = sec[1];
+            if (sn === 'mods') { currentSection = 'mods'; currentDepSection = null; currentDep = null; }
+            else if (sn.startsWith('dependencies')) {
+                currentSection = 'deps';
+                currentDepSection = sn.includes('.') ? sn.slice(sn.indexOf('.') + 1).replace(/^"/,'').replace(/"$/,'') : 'global';
+                if (!dependencies[currentDepSection]) dependencies[currentDepSection] = [];
+                currentDep = null;
+            } else { currentSection = 'other'; currentDepSection = null; currentDep = null; }
+            continue;
+        }
+        const kv = t.match(/^(\w+)\s*=\s*(.+)$/);
+        if (!kv) continue;
+        const key = kv[1];
+        const val = kv[2].replace(/^"/,'').replace(/"$/,'');
+        if (currentSection === 'mods' && key === 'modId') modIds.push(val);
+        if (currentSection === 'deps' && currentDepSection) {
+            if (key === 'modId') {
+                currentDep = { modId: val, mandatory: true, versionRange: '*' };
+                dependencies[currentDepSection].push(currentDep);
+            }
+            else if (currentDep && key === 'mandatory') currentDep.mandatory = val === 'true';
+            else if (currentDep && key === 'type') {
+                if (val.toLowerCase() === 'optional' || val.toLowerCase() === 'incompatible') currentDep.mandatory = false;
+            }
+            else if (currentDep && key === 'versionRange') currentDep.versionRange = val;
+        }
+    }
+    return { modIds, dependencies };
+}
+
+function parseJarForDependencies(jarPath) {
+    try {
+        const zip = new AdmZip(jarPath);
+        const tomlEntry = zip.getEntry('META-INF/neoforge.mods.toml') || zip.getEntry('META-INF/mods.toml');
+        if (tomlEntry) {
+            const parsed = simpleParseModsToml(zip.readAsText(tomlEntry));
+            return { type: 'forge', modIds: parsed.modIds, dependencies: parsed.dependencies };
+        }
+        const fabricEntry = zip.getEntry('fabric.mod.json');
+        if (fabricEntry) {
+            const jsonData = JSON.parse(zip.readAsText(fabricEntry));
+            const mIds = jsonData.id ? [jsonData.id] : [];
+            const deps = {};
+            if (jsonData.depends) {
+                for (const [depId, range] of Object.entries(jsonData.depends)) {
+                    if (!deps[depId]) deps[depId] = [];
+                    deps[depId].push({ modId: depId, mandatory: true, versionRange: String(range) });
+                }
+            }
+            return { type: 'fabric', modIds: mIds, dependencies: deps };
+        }
+        const quiltEntry = zip.getEntry('quilt.mod.json');
+        if (quiltEntry) {
+            const jsonData = JSON.parse(zip.readAsText(quiltEntry));
+            const ql = jsonData.quilt_loader || {};
+            const mIds = ql.id ? [ql.id] : [];
+            const deps = {};
+            if (ql.depends) {
+                for (const [depId, depEntry] of Object.entries(ql.depends)) {
+                    if (!deps[depId]) deps[depId] = [];
+                    const mandatory = typeof depEntry === 'object' ? depEntry.optional !== true : true;
+                    const range = typeof depEntry === 'object' ? (depEntry.version || '*') : String(depEntry);
+                    deps[depId].push({ modId: depId, mandatory, versionRange: range });
+                }
+            }
+            return { type: 'quilt', modIds: mIds, dependencies: deps };
+        }
+    } catch (e) {
+        console.warn('parseJarForDependencies failed:', jarPath, e.message);
+    }
+    return null;
+}
+
+async function resolveNestedDeps(deps, loader, mcVersion, resolvedIds, depth) {
+    if (depth > 5) return [];
+    if (!resolvedIds) resolvedIds = new Set();
+    const downloads = [];
+    for (const dep of deps || []) {
+        if (dep.dependency_type !== 'required') continue;
+        try {
+            let vInfo;
+            if (dep._cfId) {
+                const key = `cf:${dep._cfId}`;
+                if (resolvedIds.has(key)) continue;
+                resolvedIds.add(key);
+                vInfo = await getCurseForgeModVersion(dep._cfId, loader, mcVersion);
+            } else if (dep.version_id) {
+                if (resolvedIds.has(dep.version_id)) continue;
+                resolvedIds.add(dep.version_id);
+                const res = await fetch(`${MODRINTH_API}/version/${dep.version_id}`, {
+                    headers: { 'User-Agent': 'SchleimyLauncher/6.0.0' }
+                });
+                if (!res.ok) continue;
+                const vData = await res.json();
+                vInfo = { url: vData.files[0]?.url, filename: vData.files[0]?.filename, dependencies: vData.dependencies || [], versionId: vData.id, versionNumber: vData.version_number, projectId: vData.project_id, source: 'modrinth' };
+            } else if (dep.project_id) {
+                if (resolvedIds.has(dep.project_id)) continue;
+                resolvedIds.add(dep.project_id);
+                vInfo = await getModrinthModVersion(dep.project_id, loader, mcVersion);
+            }
+            if (vInfo && vInfo.url) {
+                downloads.push({ url: vInfo.url, filename: vInfo.filename, projectId: vInfo.projectId, source: vInfo.source, versionId: vInfo.versionId, versionNumber: vInfo.versionNumber });
+                if (vInfo.dependencies && vInfo.dependencies.length > 0) {
+                    const nested = await resolveNestedDeps(vInfo.dependencies, loader, mcVersion, resolvedIds, depth + 1);
+                    downloads.push(...nested);
+                }
+            }
+        } catch (e) {
+            console.warn('resolveNestedDeps failed for', dep?.modId || dep?.project_id, e.message);
+        }
+    }
+    return downloads;
+}
+
+async function installDownloads(downloads, profileName, errors, installed) {
+    const seenFiles = new Set();
+    for (const item of downloads) {
+        if (!item || !item.filename || !item.url) continue;
+        if (seenFiles.has(item.filename)) continue;
+        seenFiles.add(item.filename);
+        try {
+            const res = await downloadModFile({ ...item, profileName });
+            if (res.success) installed.push(item.filename);
+            else errors.push(`Installieren von ${item.filename} fehlgeschlagen: ${res.error}`);
+        } catch (e) {
+            errors.push(`Installieren von ${item.filename} fehlgeschlagen: ${e.message}`);
+        }
+    }
+}
+
 function createLogWindow() {
     if (logWindow && !logWindow.isDestroyed()) {
         logWindow.show();
@@ -181,6 +385,7 @@ function createLogWindow() {
 }
 
 // ===== WINDOW =====
+let tray = null;
 function createWindow() {
     mainWindow = new BrowserWindow({
         width: 1380, height: 900, minWidth: 940, minHeight: 620,
@@ -190,7 +395,43 @@ function createWindow() {
         icon: path.join(__dirname, 'build', 'logo.png')
     });
     mainWindow.loadFile('index.html');
+    mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+        if (level >= 2) console.error(`[RENDERER CONSOLE]: ${message} (${sourceId}:${line})`);
+    });
     mainWindow.once('ready-to-show', () => mainWindow.show());
+    
+    // Feature 9: Tray
+    if (!tray) {
+        tray = new Tray(path.join(__dirname, 'build', 'logo.png'));
+        const updateTrayMenu = () => {
+            const profiles = loadProfiles();
+            const profileItems = Object.keys(profiles).map(name => ({
+                label: name,
+                click: () => {
+                    mainWindow.show();
+                    sendEvent('tray-launch', 'Launch Profile', name);
+                }
+            }));
+            const contextMenu = Menu.buildFromTemplate([
+                { label: 'Zeige/Verstecke Launcher', click: () => mainWindow.isVisible() ? mainWindow.hide() : mainWindow.show() },
+                { type: 'separator' },
+                ...profileItems,
+                { type: 'separator' },
+                { label: 'Beenden', click: () => { app.isQuitting = true; app.quit(); } }
+            ]);
+            tray.setContextMenu(contextMenu);
+            tray.setToolTip('Schleimy Launcher');
+        };
+        updateTrayMenu();
+        tray.on('click', () => mainWindow.isVisible() ? mainWindow.hide() : mainWindow.show());
+    }
+
+    mainWindow.on('close', (e) => {
+        if (!app.isQuitting) {
+            e.preventDefault();
+            mainWindow.hide();
+        }
+    });
 }
 
 ipcMain.handle('p2p-fetch-public', async () => {
@@ -300,7 +541,17 @@ ipcMain.handle('window-maximize', (e) => {
     if (win.isMaximized()) win.unmaximize(); else win.maximize();
     return true; 
 });
-ipcMain.handle('window-close', (e) => { BrowserWindow.fromWebContents(e.sender)?.close(); return true; });
+ipcMain.handle('window-close', (e, shift) => { 
+    const win = BrowserWindow.fromWebContents(e.sender);
+    if (!win) return false;
+    if (shift) {
+        app.isQuitting = true;
+        app.quit();
+    } else {
+        win.hide();
+    }
+    return true; 
+});
 
 // ===== API IPC (Moved from Renderer) =====
 
@@ -369,7 +620,13 @@ async function searchModrinth(query, facets, limit = 20, offset = 0) {
         if (facets.type) facetArray.push([`project_type:${facets.type}`]);
         if (facets.loader) facetArray.push([`categories:${facets.loader}`]);
         if (facets.version) facetArray.push([`versions:${facets.version}`]);
-        if (facets.category) facetArray.push([`categories:${facets.category}`]);
+        if (facets.category) {
+            if (Array.isArray(facets.category)) {
+                if (facets.category.length > 0) facetArray.push(facets.category.map(c => `categories:${c}`));
+            } else {
+                facetArray.push([`categories:${facets.category}`]);
+            }
+        }
 
         const url = new URL(`${MODRINTH_API}/search`);
         url.searchParams.append('query', query);
@@ -379,7 +636,7 @@ async function searchModrinth(query, facets, limit = 20, offset = 0) {
 
         const res = await fetch(url, { 
             signal: controller.signal,
-            headers: { 'User-Agent': 'SchleimyLauncher/4.0.5 (github.com/Schleimy007/schleimy-launcher)' }
+            headers: { 'User-Agent': 'SchleimyLauncher/6.0.0 (github.com/Schleimy007/schleimy-launcher)' }
         });
         clearTimeout(timeout);
         if (!res.ok) throw new Error('Modrinth search failed');
@@ -446,10 +703,8 @@ async function getCurseForgeModVersion(cfId, loader, mcVersion) {
     if (loader && CF_LOADER[loader]) url.searchParams.append('modLoaderType', CF_LOADER[loader]);
     url.searchParams.append('pageSize', 1);
 
-    const res = await fetch(url, { headers: CF_HEADERS, signal: controller.signal });
+    const data = await fetchCachedJSON(url.toString(), { headers: CF_HEADERS, signal: controller.signal });
     clearTimeout(timeoutId);
-    if (!res.ok) throw new Error('Fehler beim Abrufen der CurseForge-Version');
-    const data = await res.json();
 
     if (!data.data || data.data.length === 0) throw new Error(`Keine kompatible CF-Version für ${loader} ${mcVersion} gefunden.`);
 
@@ -464,6 +719,44 @@ async function getCurseForgeModVersion(cfId, loader, mcVersion) {
         versionNumber: file.displayName,
         projectId: `cf:${cfId}`,
         source: 'curseforge'
+    };
+}
+
+async function getModrinthModVersion(slug, loader, mcVersion) {
+    const fetchVersions = async (targetLoader) => {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
+        const url = new URL(`${MODRINTH_API}/project/${slug}/version`);
+        if (targetLoader) url.searchParams.append('loaders', JSON.stringify([targetLoader]));
+        if (mcVersion) url.searchParams.append('game_versions', JSON.stringify([mcVersion]));
+
+        const versions = await fetchCachedJSON(url.toString(), {
+            signal: controller.signal,
+            headers: { 'User-Agent': 'SchleimyLauncher/6.0.0 (github.com/Schleimy007/schleimy-launcher)' }
+        });
+        clearTimeout(timeoutId);
+        return versions;
+    };
+
+    let versions = await fetchVersions(loader);
+    if (versions.length === 0 && loader === 'neoforge') {
+        versions = await fetchVersions('forge');
+    }
+    if (versions.length === 0 && loader === 'quilt') {
+        versions = await fetchVersions('fabric');
+    }
+    if (versions.length === 0) throw new Error(`Keine kompatible Version für ${loader} ${mcVersion} gefunden.`);
+
+    const version = versions[0];
+    const primaryFile = version.files.find(f => f.primary) || version.files[0];
+    return {
+        url: primaryFile.url,
+        filename: primaryFile.filename,
+        dependencies: version.dependencies || [],
+        versionId: version.id,
+        versionNumber: version.version_number,
+        projectId: version.project_id,
+        source: 'modrinth'
     };
 }
 
@@ -482,7 +775,7 @@ ipcMain.handle('api:getModVersion', async (_e, { slug, loader, mcVersion }) => {
 
         const res = await fetch(url, { 
             signal: controller.signal,
-            headers: { 'User-Agent': 'SchleimyLauncher/4.0.5 (github.com/Schleimy007/schleimy-launcher)' }
+            headers: { 'User-Agent': 'SchleimyLauncher/6.0.0 (github.com/Schleimy007/schleimy-launcher)' }
         });
         clearTimeout(timeoutId);
         if (!res.ok) throw new Error('Fehler beim Abrufen der Mod-Version');
@@ -531,7 +824,7 @@ ipcMain.handle('api:resolveAllDependencies', async (_e, { modVersionData, loader
                     if (resolvedIds.has(dep.version_id)) continue;
                     resolvedIds.add(dep.version_id);
                     const res = await fetch(`${MODRINTH_API}/version/${dep.version_id}`, {
-                        headers: { 'User-Agent': 'SchleimyLauncher/4.0.5 (github.com/Schleimy007/schleimy-launcher)' }
+                        headers: { 'User-Agent': 'SchleimyLauncher/6.0.0 (github.com/Schleimy007/schleimy-launcher)' }
                     });
                     if (!res.ok) continue;
                     const vData = await res.json();
@@ -601,7 +894,7 @@ ipcMain.handle('api:getModDetails', async (_e, { slug, source, cfId }) => {
             try {
                 const res = await fetch(`${MODRINTH_API}/project/${slug}`, { 
                     signal: controller.signal,
-                    headers: { 'User-Agent': 'SchleimyLauncher/4.0.5 (github.com/Schleimy007/schleimy-launcher)' }
+                    headers: { 'User-Agent': 'SchleimyLauncher/6.0.0 (github.com/Schleimy007/schleimy-launcher)' }
                 });
                 clearTimeout(timeout);
                 if (!res.ok) return null;
@@ -664,7 +957,7 @@ ipcMain.handle('api:getModVersions', async (_e, { slug, source, cfId }) => {
             try {
                 const res = await fetch(`${MODRINTH_API}/project/${slug}/version`, { 
                     signal: controller.signal,
-                    headers: { 'User-Agent': 'SchleimyLauncher/4.0.5 (github.com/Schleimy007/schleimy-launcher)' }
+                    headers: { 'User-Agent': 'SchleimyLauncher/6.0.0 (github.com/Schleimy007/schleimy-launcher)' }
                 });
                 clearTimeout(timeout);
                 if (!res.ok) return [];
@@ -688,24 +981,48 @@ ipcMain.handle('api:getModVersions', async (_e, { slug, source, cfId }) => {
 // ===== AUTH IPC =====
 ipcMain.handle('login-microsoft', async () => {
     try {
+        // 1. NEU: Session importieren und kompletten Cache/Storage leeren
+        const { session } = require('electron');
+        await session.defaultSession.clearStorageData({
+            storages: ['appcache', 'cookies', 'localstorage', 'sessionstorage']
+        });
+
+        // 2. Auth initialisieren 
         const authManager = new Auth('select_account');
-        const xboxManager = await authManager.launch('raw');
+        const xboxManager = await authManager.launch('electron');
         const token = await xboxManager.getMinecraft();
         const mclcToken = token.mclc();
+        
         saveAuthToken(mclcToken);
-        // Feature 16: Multi-Account
+        
+        // Feature 16: Multi-Account (bleibt unverändert)
         const accounts = loadAccounts();
         const existing = accounts.findIndex(a => a.uuid === mclcToken.uuid);
         const entry = { name: mclcToken.name, uuid: mclcToken.uuid, active: true };
+        
         if (existing >= 0) accounts[existing] = { ...accounts[existing], ...entry };
         else accounts.push(entry);
+        
         accounts.forEach(a => { a.active = (a.uuid === mclcToken.uuid); });
         saveAccounts(accounts);
+        
         return { success: true, name: mclcToken.name, uuid: mclcToken.uuid };
-    } catch (error) { return { success: false, error: String(error) }; }
+    } catch (error) { 
+        return { success: false, error: String(error) }; 
+    }
 });
 ipcMain.handle('get-auth', () => { const t = loadAuthToken(); return t ? { name: t.name, uuid: t.uuid } : null; });
-ipcMain.handle('clear-auth', () => { clearAuthToken(); return true; });
+ipcMain.handle('clear-auth', async () => { 
+    clearAuthToken(); 
+    
+    // Den Browser-Cache von Electron zwingend mitlöschen
+    const { session } = require('electron');
+    await session.defaultSession.clearStorageData({
+        storages: ['appcache', 'cookies', 'localstorage', 'sessionstorage']
+    });
+    
+    return true; 
+});
 ipcMain.handle('get-accounts', () => {
     const accounts = loadAccounts();
     if (accounts.length === 0) {
@@ -730,15 +1047,21 @@ ipcMain.handle('remove-account', (_e, uuid) => { saveAccounts(loadAccounts().fil
 // ===== PROFILE IPC =====
 ipcMain.handle('get-profiles', () => loadProfiles());
 ipcMain.handle('save-profiles', (_e, p) => { saveProfiles(p); return true; });
-ipcMain.handle('create-profile', (_e, { name, loader, version, hostMode }) => {
-    const pp = path.join(instancesDir, name);
-    if (fs.existsSync(pp)) return { success: false, error: 'Profil existiert bereits' };
-    fs.mkdirSync(pp, { recursive: true });
-    ['mods','shaderpacks','resourcepacks'].forEach(d => fs.mkdirSync(path.join(pp, d), { recursive: true }));
-    const profiles = loadProfiles();
-    profiles[name] = { loader, version, ram: null, javaPath: '', jvmArgs: '', jvmPreset: 'default', hostMode: hostMode || 'none' };
-    saveProfiles(profiles);
-    return { success: true };
+ipcMain.handle('create-profile', async (_e, { name, loader, version, hostMode }) => {
+    try {
+        if (!name || typeof name !== 'string') return { success: false, error: 'Ungültiger Profilname' };
+        const pp = path.join(instancesDir, name);
+        if (fs.existsSync(pp)) return { success: false, error: 'Profil existiert bereits' };
+        fs.mkdirSync(pp, { recursive: true });
+        ['mods','shaderpacks','resourcepacks'].forEach(d => fs.mkdirSync(path.join(pp, d), { recursive: true }));
+        const profiles = loadProfiles();
+        profiles[name] = { loader, version, ram: null, javaPath: '', jvmArgs: '', jvmPreset: 'default', hostMode: hostMode || 'none' };
+        saveProfiles(profiles);
+        return { success: true };
+    } catch (err) {
+        console.error('[create-profile ERROR]:', err);
+        return { success: false, error: err.message || 'Fehler beim Erstellen des Profils' };
+    }
 });
 ipcMain.handle('delete-profile', (_e, name) => {
     try {
@@ -977,33 +1300,581 @@ function deleteFile(dir, filename) {
     catch (e) { return { success: false, error: e.message }; }
 }
 
-// Download handler for mods/shaders/resourcepacks
-ipcMain.on('download-mod', async (_e, data) => {
-    const { downloadUrl, profileName, fileName, targetDir, projectId, source, versionId, versionNumber } = data;
-    const subDir = targetDir || 'mods';
-    const tp = path.join(instancesDir, profileName, subDir);
+function disableModFile(filePath) {
+    if (!fs.existsSync(filePath)) return false;
+    const disabledPath = `${filePath}.disabled`;
+    if (fs.existsSync(disabledPath)) return false;
+    fs.renameSync(filePath, disabledPath);
+    return true;
+}
+
+async function downloadModFile(opts) {
+    const profileName = opts.profileName;
+    const fileName = opts.fileName || opts.filename;
+    const downloadUrl = opts.downloadUrl || opts.url;
+    const targetDir = opts.targetDir || 'mods';
+    const projectId = opts.projectId;
+    const source = opts.source;
+    const versionId = opts.versionId;
+    const versionNumber = opts.versionNumber;
+    if (!profileName || typeof profileName !== 'string') return { success: false, error: 'Ungültiger Profilname', fileName };
+    if (!fileName || typeof fileName !== 'string') return { success: false, error: 'Ungültiger Dateiname', fileName };
+    if (!downloadUrl || typeof downloadUrl !== 'string') return { success: false, error: 'Ungültige Download-URL', fileName };
+
+    const unsafeName = path.basename(fileName);
+    const safeName = unsafeName
+        .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+        .replace(/\s+$/g, '')
+        .replace(/^\.+/, '') || unsafeName;
+    const finalName = safeName || `mod-${Date.now()}.jar`;
+
+    const tp = path.join(instancesDir, profileName, targetDir);
     if (!fs.existsSync(tp)) fs.mkdirSync(tp, { recursive: true });
-    const filePath = path.join(tp, fileName);
+    const filePath = path.join(tp, finalName);
     try {
-        sendEvent('download-progress', `${fileName} wird heruntergeladen...`, { fileName, progress: 0 });
+        sendEvent('download-progress', `${finalName} wird heruntergeladen...`, { fileName: finalName, progress: 0 });
         const response = await fetch(downloadUrl);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const total = parseInt(response.headers.get('content-length') || '0');
-        if (response.body && typeof response.body.getReader === 'function' && total > 0) {
-            const reader = response.body.getReader(); const chunks = []; let received = 0;
-            while (true) { const { done, value } = await reader.read(); if (done) break; chunks.push(Buffer.from(value)); received += value.length; sendEvent('download-progress', `${fileName}`, { fileName, progress: Math.round((received/total)*100), received, total }); }
-            fs.writeFileSync(filePath, Buffer.concat(chunks));
-        } else { fs.writeFileSync(filePath, Buffer.from(await response.arrayBuffer())); }
-        sendEvent('success', `${fileName} erfolgreich installiert!`, { fileName, projectId });
-
-        // If it's a mod, save metadata to lock file
-        if (subDir === 'mods' && projectId && source && versionId) {
+        const buffer = Buffer.from(await response.arrayBuffer());
+        fs.writeFileSync(filePath, buffer);
+        sendEvent('download-progress', `${finalName}`, { fileName: finalName, progress: 100 });
+        if (targetDir === 'mods' && (projectId || versionId)) {
             const lockFilePath = path.join(instancesDir, profileName, 'schleimy-lock.json');
             const lockFile = loadJSON(lockFilePath, { mods: {} });
-            lockFile.mods[fileName] = { projectId, source, versionId, versionNumber };
+            lockFile.mods[finalName] = { projectId: projectId || null, source: source || 'modrinth', versionId: versionId || null, versionNumber: versionNumber || null };
             saveJSON(lockFilePath, lockFile);
         }
-    } catch (error) { sendEvent('error', `Download fehlgeschlagen: ${error.message}`, { fileName }); }
+        sendEvent('download-complete', `${finalName} installiert.`, { fileName: finalName });
+        return { success: true, fileName: finalName, filePath };
+    } catch (error) {
+        sendEvent('download-error', `${finalName}: ${error.message}`, { fileName: finalName, error: error.message });
+        return { success: false, error: error.message, fileName: finalName };
+    }
+}
+
+ipcMain.on('download-mod', async (_e, data) => {
+    const result = await downloadModFile(data);
+    if (result.success) {
+        sendEvent('success', `${result.fileName} erfolgreich installiert!`, { 
+            fileName: result.fileName, 
+            projectId: data.projectId,
+            profileName: data.profileName,
+            targetDir: data.targetDir
+        });
+    } else {
+        sendEvent('error', `Download fehlgeschlagen: ${result.error}`, { fileName: result.fileName });
+    }
+});
+
+const SYSTEM_DEP_IDS = new Set([
+    'minecraft', 'java', 'fabricloader', 'fabric-loader', 'forge', 'neoforge', 
+    'quilt_loader', 'quilt-loader', 'c', 'fabric', 'quilt', 'modmenu', 
+    'forge-loader', 'neoforge-loader', 'mc', 'kotlin_for_forge', 'kotlinforforge',
+    'fabric-language-kotlin', 'forge_loader', 'neoforge_loader', 'quilt_base'
+]);
+
+function isIgnoredDependency(depId, loader) {
+    if (!depId) return true;
+    const clean = String(depId).toLowerCase();
+    if (SYSTEM_DEP_IDS.has(clean)) return true;
+    if ((loader === 'neoforge' || loader === 'forge') && (clean === 'fabric-api' || clean === 'fabric_api' || clean === 'optifabric' || clean === 'fabric-language-kotlin' || clean === 'cloth-basic-math' || clean === 'sodium-options-api')) {
+        return true;
+    }
+    return false;
+}
+
+// Feature 3: Fix mod conflicts and install missing dependencies
+ipcMain.handle('fix-mod-conflicts', async (_e, { profileName, loader, mcVersion }) => {
+    const mp = path.join(instancesDir, profileName, 'mods');
+    if (!fs.existsSync(mp)) return { conflicts: [], missing: [], disabled: [], installed: [], updated: [], activated: [], errors: [], unchecked: [] };
+
+    const allFiles = fs.readdirSync(mp);
+    const mods = allFiles.filter(f => f.endsWith('.jar'));
+    const disabledFiles = allFiles.filter(f => f.endsWith('.jar.disabled'));
+    const conflicts = [];
+    const missing = [];
+    const disabled = [];
+    const installed = [];
+    const updated = [];
+    const activated = [];
+    const errors = [];
+    const unchecked = [];
+    const seenProjects = new Set();
+    const seenVersions = new Set();
+    const disabledModsMap = new Map();
+    const crypto = require('crypto');
+    const missingProjectIds = new Map();
+
+    for (const df of disabledFiles) {
+        const dfPath = path.join(mp, df);
+        const cleanName = df.replace(/\.jar\.disabled$/i, '').replace(/[-_v0-9+.]+$/g, '').toLowerCase();
+        disabledModsMap.set(cleanName, df);
+        disabledModsMap.set(`name:${cleanName}`, df);
+        try {
+            const jarInfo = parseJarForDependencies(dfPath);
+            if (jarInfo && jarInfo.modIds) {
+                for (const mid of jarInfo.modIds) {
+                    if (mid) {
+                        const cleanMid = mid.toLowerCase();
+                        disabledModsMap.set(cleanMid, df);
+                        disabledModsMap.set(`jar:${cleanMid}`, df);
+                        disabledModsMap.set(`name:${cleanMid}`, df);
+                    }
+                }
+            }
+        } catch (_) {}
+    }
+
+    const lockFilePath = path.join(instancesDir, profileName, 'schleimy-lock.json');
+    const lockFile = fs.existsSync(lockFilePath) ? loadJSON(lockFilePath, { mods: {} }) : { mods: {} };
+    for (const [key, meta] of Object.entries(lockFile.mods || {})) {
+        if (!meta) continue;
+        const fname = meta.fileName || meta.filename || '';
+        const isDisabledOnDisk = disabledFiles.includes(`${fname}.disabled`) || disabledFiles.includes(fname) || fname.endsWith('.disabled');
+        if (isDisabledOnDisk) {
+            const dfName = fname.endsWith('.disabled') ? fname : `${fname}.disabled`;
+            if (meta.projectId) disabledModsMap.set(meta.projectId.toLowerCase(), dfName);
+            if (meta.versionId) disabledModsMap.set(meta.versionId.toLowerCase(), dfName);
+            if (meta.cfId) disabledModsMap.set(`cf:${meta.cfId}`, dfName);
+        }
+    }
+
+    function checkAndActivateIfDisabled(key) {
+        if (!key) return false;
+        const lookup = String(key).toLowerCase();
+        let dfName = disabledModsMap.get(lookup) || disabledModsMap.get(lookup.replace(/^jar:/, '')) || disabledModsMap.get(`jar:${lookup}`);
+        if (!dfName) {
+            for (const [mKey, mVal] of disabledModsMap.entries()) {
+                if (mKey === lookup || mKey === `jar:${lookup}` || mVal.toLowerCase().includes(lookup)) {
+                    dfName = mVal;
+                    break;
+                }
+            }
+        }
+        if (dfName) {
+            const disabledPath = path.join(mp, dfName);
+            const enabledName = dfName.replace('.jar.disabled', '.jar');
+            const enabledPath = path.join(mp, enabledName);
+            if (fs.existsSync(disabledPath)) {
+                try {
+                    fs.renameSync(disabledPath, enabledPath);
+                    activated.push(enabledName);
+                    seenProjects.add(key);
+                    seenProjects.add(lookup);
+                    seenProjects.add(`jar:${lookup}`);
+                    disabledModsMap.delete(lookup);
+                    return true;
+                } catch (err) {}
+            }
+        }
+        return false;
+    }
+
+    async function resolveProjectVersion(projectId) {
+        try {
+            if (typeof projectId === 'string' && projectId.startsWith('cf:')) {
+                const cfId = parseInt(projectId.replace('cf:', ''), 10);
+                return await getCurseForgeModVersion(cfId, loader, mcVersion);
+            }
+            if (typeof projectId === 'string' && /^[0-9a-fA-F-]{32,36}$/.test(projectId)) {
+                const res = await fetch(`${MODRINTH_API}/version/${projectId}`, { headers: { 'User-Agent': 'SchleimyLauncher/6.0.0 (github.com/Schleimy007/schleimy-launcher)' } });
+                if (!res.ok) throw new Error(`Modrinth-Version ${projectId} konnte nicht geladen werden.`);
+                const version = await res.json();
+                const primaryFile = (version.files || []).find(f => f.primary) || (version.files || [])[0];
+                return {
+                    url: primaryFile?.url,
+                    filename: primaryFile?.filename,
+                    dependencies: version.dependencies || [],
+                    versionId: version.id,
+                    versionNumber: version.version_number,
+                    projectId: version.project_id,
+                    source: 'modrinth'
+                };
+            }
+            return await getModrinthModVersion(projectId, loader, mcVersion);
+        } catch (e) {
+            return null;
+        }
+    }
+
+    async function searchModByDepName(depName) {
+        if (isIgnoredDependency(depName, loader)) return null;
+        const searchVariants = [depName];
+        const cleaned = depName.replace(/-(fabric|forge|neoforge|quilt|mc\d+.*|\d+\.\d+.*)$/i, '')
+                               .replace(/_(fabric|forge|neoforge|quilt|mc\d+.*|\d+\.\d+.*)$/i, '');
+        if (cleaned !== depName) searchVariants.push(cleaned);
+        if (/^\d+$/.test(depName)) searchVariants.push(depName);
+
+        for (const variant of searchVariants) {
+            if (/^[a-zA-Z0-9_-]+$/.test(variant)) {
+                try {
+                    const prRes = await fetch(`${MODRINTH_API}/project/${encodeURIComponent(variant)}`, {
+                        headers: { 'User-Agent': 'SchleimyLauncher/6.0.0' }
+                    });
+                    if (prRes.ok) {
+                        const prData = await prRes.json();
+                        if (prData.slug) return prData.slug;
+                    }
+                } catch (_) {}
+            }
+        }
+
+        for (const variant of searchVariants) {
+            try {
+                const mrRes = await fetch(`${MODRINTH_API}/search?query=${encodeURIComponent(variant)}&limit=10&facets=${encodeURIComponent(JSON.stringify([['project_type:mod']]))}`, {
+                    headers: { 'User-Agent': 'SchleimyLauncher/6.0.0' }
+                });
+                if (mrRes.ok) {
+                    const mrData = await mrRes.json();
+                    if (mrData.hits && mrData.hits.length > 0) {
+                        for (const hit of mrData.hits) {
+                            if (!loader || hit.categories.includes(loader)) return hit.slug;
+                        }
+                        return mrData.hits[0].slug;
+                    }
+                }
+            } catch (_) {}
+
+            try {
+                if (CF_API_KEY) {
+                    const cfRes = await fetch(`${CF_API}/mods/search?gameId=${CF_GAME_ID}&searchFilter=${encodeURIComponent(variant)}&classId=${CF_CLASS.mod}&pageSize=5`, { headers: CF_HEADERS });
+                    if (cfRes.ok) {
+                        const cfData = await cfRes.json();
+                        if (cfData.data && cfData.data.length > 0) return `cf:${cfData.data[0].id}`;
+                    }
+                }
+            } catch (_) {}
+        }
+
+        return null;
+    }
+
+    // PASS 1: Read all jars first and populate seenProjects / seenModIds
+    const parsedMods = [];
+    for (const mod of mods) {
+        const modPath = path.join(mp, mod);
+        let foundModIds = [];
+        let jarDeps = {};
+        let vData = null;
+
+        try {
+            const jarInfo = parseJarForDependencies(modPath);
+            if (jarInfo) {
+                foundModIds = jarInfo.modIds || [];
+                jarDeps = jarInfo.dependencies || {};
+                for (const mid of foundModIds) {
+                    if (mid) {
+                        seenProjects.add(`jar:${mid.toLowerCase()}`);
+                        seenProjects.add(mid.toLowerCase());
+                    }
+                }
+            }
+        } catch (e) {}
+
+        try {
+            const sha1 = crypto.createHash('sha1').update(fs.readFileSync(modPath)).digest('hex');
+            const shaRes = await fetch(`https://api.modrinth.com/v2/version_file/${sha1}?algorithm=sha1`);
+            if (shaRes.ok) {
+                vData = await shaRes.json();
+                const projectId = vData.project_id;
+                const versionId = vData.id;
+                if (projectId) {
+                    if (seenProjects.has(projectId)) {
+                        conflicts.push({ type: 'duplicate', message: `Doppelte Mod: ${mod}`, files: [mod] });
+                        if (disableModFile(modPath)) disabled.push(mod);
+                        continue;
+                    }
+                    seenProjects.add(projectId);
+                    seenProjects.add(projectId.toLowerCase());
+                }
+                if (versionId) seenVersions.add(versionId);
+                if (!vData.game_versions?.includes(mcVersion)) {
+                    conflicts.push({ type: 'version', message: `${mod} ist nicht für MC ${mcVersion} verifiziert - automatische Korrektur wird versucht.`, files: [mod], projectId: vData.project_id });
+                    if (vData.project_id) {
+                        try {
+                            const fixedVer = await getModrinthModVersion(vData.project_id, loader, mcVersion);
+                            if (fixedVer && fixedVer.url && fixedVer.filename !== mod) {
+                                await downloadModFile({
+                                    downloadUrl: fixedVer.url,
+                                    fileName: fixedVer.filename,
+                                    profileName,
+                                    projectId: vData.project_id,
+                                    source: 'modrinth',
+                                    versionId: fixedVer.versionId,
+                                    versionNumber: fixedVer.versionNumber
+                                });
+                                installed.push(fixedVer.filename);
+                                if (disableModFile(modPath)) disabled.push(mod);
+                            }
+                        } catch (_) {}
+                    }
+                }
+                if (!vData.loaders?.includes(loader)) {
+                    conflicts.push({ type: 'loader', message: `${mod} unterstützt ${loader} nicht.`, files: [mod], projectId: vData.project_id });
+                }
+            }
+        } catch (e) {}
+
+        const cleanName = mod.replace(/\.jar$/i, '').replace(/[-_v0-9+.]+$/g, '').toLowerCase();
+        if (cleanName) seenProjects.add(cleanName);
+
+        parsedMods.push({ mod, modPath, vData, jarDeps });
+    }
+
+    // INCOMPATIBILITY CHECK
+    let hasIris = false;
+    let embeddiumMod = null;
+    let embeddiumPath = null;
+    for (const pm of parsedMods) {
+        const mids = pm.foundModIds || [];
+        if (mids.includes('iris') || pm.mod.toLowerCase().includes('iris-')) hasIris = true;
+        if (mids.includes('embeddium') || pm.mod.toLowerCase().includes('embeddium')) {
+            embeddiumMod = pm.mod;
+            embeddiumPath = pm.modPath;
+        }
+    }
+    if (hasIris && embeddiumMod && embeddiumPath) {
+        if (disableModFile(embeddiumPath)) {
+            disabled.push(embeddiumMod);
+            conflicts.push({ type: 'incompatible', message: `Embeddium ist inkompatibel mit Iris - durch Sodium ersetzt`, files: [embeddiumMod] });
+        }
+    }
+
+    for (const pm of parsedMods) {
+        for (const dep of (pm.vData?.dependencies || [])) {
+            if (dep.dependency_type === 'incompatible') {
+                const incId = dep.project_id || dep.version_id;
+                if (!incId) continue;
+                for (const target of parsedMods) {
+                    if (target.vData?.project_id === incId || target.vData?.id === incId) {
+                        if (disableModFile(target.modPath)) {
+                            disabled.push(target.mod);
+                            conflicts.push({ type: 'incompatible', message: `${target.mod} ist inkompatibel mit ${pm.mod}`, files: [target.mod, pm.mod] });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // PASS 2: Check required dependencies against complete seenProjects
+    for (const { mod, vData, jarDeps } of parsedMods) {
+        const requiredDepNames = new Set();
+        for (const [depModId, depEntries] of Object.entries(jarDeps)) {
+            if (isIgnoredDependency(depModId, loader)) continue;
+            for (const entry of depEntries) {
+                if (entry.mandatory !== false) {
+                    requiredDepNames.add(depModId);
+                }
+            }
+        }
+
+        for (const dep of (vData?.dependencies || [])) {
+            if (dep.dependency_type === 'required') {
+                const depKey = dep._cfId ? `cf:${dep._cfId}` : dep.version_id || dep.project_id;
+                if (!depKey) continue;
+                const cleanKey = String(depKey).toLowerCase();
+                if (isIgnoredDependency(cleanKey, loader)) continue;
+                const depInstalled = (dep.project_id && (seenProjects.has(dep.project_id) || seenProjects.has(dep.project_id.toLowerCase()))) ||
+                    (dep.version_id && seenVersions.has(dep.version_id)) ||
+                    (dep._cfId && seenProjects.has(`cf:${dep._cfId}`));
+                if (depInstalled) continue;
+                if (checkAndActivateIfDisabled(dep.project_id) || checkAndActivateIfDisabled(dep.version_id) || checkAndActivateIfDisabled(dep._cfId ? `cf:${dep._cfId}` : null)) {
+                    continue;
+                }
+                if (missingProjectIds.has(depKey)) continue;
+                missingProjectIds.set(depKey, {
+                    requiredBy: mod,
+                    projectId: dep.project_id,
+                    versionId: dep.version_id,
+                    cfId: dep._cfId,
+                });
+                requiredDepNames.add(depKey);
+            }
+        }
+
+        for (const depModId of requiredDepNames) {
+            if (isIgnoredDependency(depModId, loader)) continue;
+            if (seenProjects.has(`jar:${depModId.toLowerCase()}`) || seenProjects.has(depModId.toLowerCase())) continue;
+            if (checkAndActivateIfDisabled(depModId) || checkAndActivateIfDisabled(`name:${depModId}`)) continue;
+            if (missingProjectIds.has(`name:${depModId}`)) continue;
+
+            const slug = await searchModByDepName(depModId);
+            if (slug) {
+                if (seenProjects.has(slug) || seenProjects.has(slug.toLowerCase())) continue;
+                missingProjectIds.set(`name:${depModId}`, {
+                    requiredBy: mod,
+                    projectId: slug,
+                    versionId: null,
+                    cfId: slug.startsWith('cf:') ? parseInt(slug.replace('cf:', ''), 10) : null,
+                    depName: depModId,
+                });
+            } else {
+                missing.push({ requiredBy: mod, projectId: depModId, projectName: depModId, unresolved: true });
+            }
+        }
+
+        if (!vData && Object.keys(jarDeps).length === 0) {
+            unchecked.push(mod);
+        }
+    }
+
+    async function resolveDependencyVersion(depEntry) {
+        if (depEntry?.cfId) {
+            return await getCurseForgeModVersion(depEntry.cfId, loader, mcVersion);
+        }
+        if (depEntry?.versionId) {
+            const res = await fetch(`${MODRINTH_API}/version/${depEntry.versionId}`, { headers: { 'User-Agent': 'SchleimyLauncher/6.0.0 (github.com/Schleimy007/schleimy-launcher)' } });
+            if (!res.ok) throw new Error(`Modrinth-Version ${depEntry.versionId} konnte nicht geladen werden.`);
+            const vData = await res.json();
+            const primaryFile = (vData.files || []).find(f => f.primary) || (vData.files || [])[0];
+            return {
+                url: primaryFile?.url,
+                filename: primaryFile?.filename,
+                dependencies: vData.dependencies || [],
+                versionId: vData.id,
+                versionNumber: vData.version_number,
+                projectId: vData.project_id,
+                source: 'modrinth'
+            };
+        }
+        if (depEntry?.projectId) {
+            return await resolveProjectVersion(depEntry.projectId);
+        }
+        throw new Error('Unbekannter Abhängigkeitstyp');
+    }
+
+    // PASS 3: Download missing dependencies and recursively install their sub-dependencies
+    for (const [projectId, depInfo] of missingProjectIds.entries()) {
+        const checkKey = depInfo.projectId || depInfo.depName || projectId;
+        if (seenProjects.has(checkKey) || seenProjects.has(String(checkKey).toLowerCase())) continue;
+        try {
+            const versionInfo = await resolveDependencyVersion(depInfo);
+            if (!versionInfo) {
+                missing.push({ ...depInfo, projectName: depInfo.projectId || depInfo.versionId || `Abhängigkeit ${projectId}` });
+                continue;
+            }
+            const downloads = await (async () => {
+                const toDownload = [{
+                    url: versionInfo.url,
+                    filename: versionInfo.filename,
+                    projectId: versionInfo.projectId,
+                    source: versionInfo.source,
+                    versionId: versionInfo.versionId,
+                    versionNumber: versionInfo.versionNumber
+                }];
+                const resolvedIds = new Set();
+
+                async function resolve(dependencies) {
+                    for (const dep of dependencies || []) {
+                        if (dep.dependency_type !== 'required') continue;
+                        const depKey = dep._cfId ? `cf:${dep._cfId}` : dep.version_id || dep.project_id;
+                        if (!depKey || resolvedIds.has(depKey)) continue;
+                        if (isIgnoredDependency(depKey, loader)) continue;
+                        if (seenProjects.has(String(depKey).toLowerCase())) continue;
+                        resolvedIds.add(depKey);
+                        let nestedVersion = null;
+                        try {
+                            if (dep._cfId) {
+                                nestedVersion = await getCurseForgeModVersion(dep._cfId, loader, mcVersion);
+                            } else if (dep.version_id) {
+                                const res = await fetch(`${MODRINTH_API}/version/${dep.version_id}`, { headers: { 'User-Agent': 'SchleimyLauncher/6.0.0 (github.com/Schleimy007/schleimy-launcher)' } });
+                                if (res.ok) {
+                                    const vData = await res.json();
+                                    nestedVersion = {
+                                        url: vData.files[0]?.url,
+                                        filename: vData.files[0]?.filename,
+                                        dependencies: vData.dependencies || [],
+                                        versionId: vData.id,
+                                        versionNumber: vData.version_number,
+                                        projectId: vData.project_id,
+                                        source: 'modrinth'
+                                    };
+                                }
+                            } else if (dep.project_id) {
+                                nestedVersion = await getModrinthModVersion(dep.project_id, loader, mcVersion);
+                            }
+                        } catch (nestedErr) {}
+                        if (nestedVersion) {
+                            toDownload.push({
+                                url: nestedVersion.url,
+                                filename: nestedVersion.filename,
+                                projectId: nestedVersion.projectId,
+                                source: nestedVersion.source,
+                                versionId: nestedVersion.versionId,
+                                versionNumber: nestedVersion.versionNumber
+                            });
+                            await resolve(nestedVersion.dependencies || []);
+                        }
+                    }
+                }
+                await resolve(versionInfo.dependencies || []);
+                return toDownload;
+            })();
+
+            const uniqueDownloads = [];
+            const seenFiles = new Set();
+            for (const item of downloads) {
+                if (!item || !item.filename || !item.url) continue;
+                if (!seenFiles.has(item.filename)) {
+                    seenFiles.add(item.filename);
+                    uniqueDownloads.push(item);
+                }
+            }
+
+            for (const item of uniqueDownloads) {
+                if (seenProjects.has(item.projectId) || seenProjects.has(item.filename.toLowerCase())) continue;
+                const res = await downloadModFile({ ...item, profileName });
+                if (res.success) {
+                    installed.push(item.filename);
+                    if (item.projectId) {
+                        seenProjects.add(item.projectId);
+                        seenProjects.add(String(item.projectId).toLowerCase());
+                    }
+                    seenProjects.add(item.filename.toLowerCase());
+                } else {
+                    errors.push(`Installieren von ${item.filename} fehlgeschlagen: ${res.error}`);
+                }
+            }
+        } catch (e) {
+            missing.push({ ...depInfo, projectName: projectId });
+            if (!e.message.includes('Keine kompatible Version') && !e.message.includes('konnte nicht ermittelt werden')) {
+                errors.push(`Installieren fehlender Abhängigkeit ${projectId} fehlgeschlagen: ${e.message}`);
+            }
+        }
+    }
+
+    // Try to update incompatible mods if possible
+    for (const conflict of conflicts.filter(c => c.type === 'version' || c.type === 'loader')) {
+        const modFile = conflict.files[0];
+        try {
+            const existingFile = path.join(mp, modFile);
+            if (!fs.existsSync(existingFile)) continue;
+            const sha1 = crypto.createHash('sha1').update(fs.readFileSync(existingFile)).digest('hex');
+            const res = await fetch(`https://api.modrinth.com/v2/version_file/${sha1}?algorithm=sha1`);
+            if (!res.ok) continue;
+            const vData = await res.json();
+            const versionInfo = await resolveProjectVersion(vData.project_id);
+            if (!versionInfo) continue;
+            const newFile = await downloadModFile({
+                profileName,
+                downloadUrl: versionInfo.url,
+                fileName: versionInfo.filename,
+                projectId: versionInfo.projectId,
+                source: versionInfo.source,
+                versionId: versionInfo.versionId,
+                versionNumber: versionInfo.versionNumber
+            });
+            if (newFile.success) {
+                if (existingFile !== newFile.filePath && fs.existsSync(existingFile)) fs.unlinkSync(existingFile);
+                updated.push(versionInfo.filename);
+            }
+        } catch (e) {
+            errors.push(`Update für ${conflict.files[0]} fehlgeschlagen: ${e.message}`);
+        }
+    }
+
+    return { conflicts, missing, disabled, installed, updated, activated, errors, unchecked };
 });
 
 // Feature 2: Check for mod updates
@@ -1102,24 +1973,166 @@ ipcMain.handle('update-mod', async (_e, { profileName, currentFile, downloadUrl,
 // Feature 3: Mod Conflict Checker
 ipcMain.handle('check-mod-conflicts', async (_e, { profileName, loader, mcVersion }) => {
     const mp = path.join(instancesDir, profileName, 'mods');
-    if (!fs.existsSync(mp)) return { conflicts: [], missing: [] };
-    const mods = fs.readdirSync(mp).filter(f => f.endsWith('.jar'));
-    const conflicts = [], missing = [], seenProjects = new Map();
-    const crypto = require('crypto');
-    for (const mod of mods) {
-        try {
-            const sha1 = crypto.createHash('sha1').update(fs.readFileSync(path.join(mp, mod))).digest('hex');
-            const res = await fetch(`https://api.modrinth.com/v2/version_file/${sha1}?algorithm=sha1`);
-            if (!res.ok) continue;
-            const vData = await res.json();
-            if (seenProjects.has(vData.project_id)) conflicts.push({ type: 'duplicate', message: `Doppelte Mod: ${mod} und ${seenProjects.get(vData.project_id)}`, files: [mod, seenProjects.get(vData.project_id)] });
-            else seenProjects.set(vData.project_id, mod);
-            if (!vData.game_versions.includes(mcVersion)) conflicts.push({ type: 'version', message: `${mod} ist nicht für MC ${mcVersion} verifiziert.`, files: [mod] });
-            if (!vData.loaders.includes(loader)) conflicts.push({ type: 'loader', message: `${mod} unterstützt ${loader} nicht.`, files: [mod] });
-            for (const dep of (vData.dependencies || [])) { if (dep.dependency_type === 'required' && dep.project_id && !seenProjects.has(dep.project_id)) { try { const pr = await fetch(`https://api.modrinth.com/v2/project/${dep.project_id}`); if (pr.ok) { const pd = await pr.json(); missing.push({ requiredBy: mod, projectId: dep.project_id, projectName: pd.title, projectSlug: pd.slug }); } } catch (_) {} } }
-        } catch (_) {}
+    if (!fs.existsSync(mp)) return { conflicts: [], missing: [], unchecked: [] };
+
+    const lockFilePath = path.join(instancesDir, profileName, 'schleimy-lock.json');
+    const lockFile = fs.existsSync(lockFilePath) ? loadJSON(lockFilePath, { mods: {} }) : { mods: {} };
+    const seenProjects = new Set();
+    const seenVersions = new Set();
+    const conflicts = [];
+    const missing = [];
+    const unchecked = [];
+
+    const allFiles = fs.readdirSync(mp);
+    const mods = allFiles.filter(f => f.endsWith('.jar'));
+    const disabledFiles = allFiles.filter(f => f.endsWith('.jar.disabled'));
+    const disabledNames = new Set(disabledFiles.map(df => df.replace('.jar.disabled', '').toLowerCase()));
+
+    async function fetchDependencyInfo(dep) {
+        if (dep.project_id) {
+            try {
+                const pr = await fetch(`https://api.modrinth.com/v2/project/${dep.project_id}`);
+                if (!pr.ok) return { projectName: dep.project_id, projectSlug: null };
+                const pd = await pr.json();
+                return { projectName: pd.title || dep.project_id, projectSlug: pd.slug || null };
+            } catch (_) {
+                return { projectName: dep.project_id, projectSlug: null };
+            }
+        }
+        if (dep.version_id) {
+            try {
+                const vr = await fetch(`${MODRINTH_API}/version/${dep.version_id}`);
+                if (!vr.ok) return { projectName: dep.version_id, projectSlug: null };
+                const vd = await vr.json();
+                return { projectName: vd.name || vd.version_number || dep.version_id, projectSlug: vd.project_id || null };
+            } catch (_) {
+                return { projectName: dep.version_id, projectSlug: null };
+            }
+        }
+        return { projectName: 'Unbekannte Abhängigkeit', projectSlug: null };
     }
-    return { conflicts, missing };
+
+    async function searchModByDepNameCheck(depName) {
+        const searchVariants = [depName];
+        const cleaned = depName.replace(/-(fabric|forge|neoforge|quilt|mc\d+.*|\d+\.\d+.*)$/i, '')
+                               .replace(/_(fabric|forge|neoforge|quilt|mc\d+.*|\d+\.\d+.*)$/i, '');
+        if (cleaned !== depName) searchVariants.push(cleaned);
+
+        for (const variant of searchVariants) {
+            try {
+                const mrRes = await fetch(`${MODRINTH_API}/search?query=${encodeURIComponent(variant)}&limit=5&facets=${encodeURIComponent(JSON.stringify([['project_type:mod']]))}`, {
+                    headers: { 'User-Agent': 'SchleimyLauncher/6.0.0' }
+                });
+                if (mrRes.ok) {
+                    const mrData = await mrRes.json();
+                    if (mrData.hits && mrData.hits.length > 0) {
+                        for (const hit of mrData.hits) {
+                            if ((!loader || hit.categories.includes(loader)) && (!mcVersion || hit.versions.includes(mcVersion))) {
+                                return { projectName: hit.title, projectSlug: hit.slug };
+                            }
+                        }
+                        return { projectName: mrData.hits[0].title, projectSlug: mrData.hits[0].slug };
+                    }
+                }
+            } catch (_) {}
+        }
+        return { projectName: depName, projectSlug: null };
+    }
+
+    // PASS 1: Inventory scan of all jars
+    const parsedMods = [];
+    for (const mod of mods) {
+        let vData = null;
+        let jarDeps = {};
+        let foundModIds = [];
+        const filePath = path.join(mp, mod);
+
+        try {
+            const jarInfo = parseJarForDependencies(filePath);
+            if (jarInfo) {
+                foundModIds = jarInfo.modIds || [];
+                jarDeps = jarInfo.dependencies || {};
+                for (const mid of foundModIds) {
+                    if (mid) {
+                        seenProjects.add(`jar:${mid.toLowerCase()}`);
+                        seenProjects.add(mid.toLowerCase());
+                    }
+                }
+            }
+        } catch (_) {}
+
+        try {
+            const sha1 = crypto.createHash('sha1').update(fs.readFileSync(filePath)).digest('hex');
+            const res = await fetch(`https://api.modrinth.com/v2/version_file/${sha1}?algorithm=sha1`);
+            if (res.ok) {
+                vData = await res.json();
+                const pid = vData.project_id;
+                if (pid) {
+                    if (seenProjects.has(pid) && lockFile.mods[mod]?.projectId !== pid) {
+                        conflicts.push({ type: 'duplicate', message: `Doppelte Mod: ${mod}`, files: [mod] });
+                    } else {
+                        seenProjects.add(pid);
+                        seenProjects.add(pid.toLowerCase());
+                    }
+                }
+                if (vData.id) seenVersions.add(vData.id);
+                if (!vData.game_versions?.includes(mcVersion)) {
+                    conflicts.push({ type: 'version', message: `${mod} ist nicht für MC ${mcVersion} verifiziert.`, files: [mod] });
+                }
+                if (!vData.loaders?.includes(loader)) {
+                    conflicts.push({ type: 'loader', message: `${mod} unterstützt ${loader} nicht.`, files: [mod] });
+                }
+            }
+        } catch (_) {}
+
+        const cleanName = mod.replace(/\.jar$/i, '').replace(/[-_v0-9+.]+$/g, '').toLowerCase();
+        if (cleanName) seenProjects.add(cleanName);
+
+        parsedMods.push({ mod, vData, jarDeps });
+    }
+
+    // PASS 2: Check dependencies against complete seenProjects
+    const reportedMissing = new Set();
+    for (const { mod, vData, jarDeps } of parsedMods) {
+        for (const [depModId, depEntries] of Object.entries(jarDeps)) {
+            if (isIgnoredDependency(depModId, loader)) continue;
+            const cleanDepId = depModId.toLowerCase();
+            for (const entry of depEntries) {
+                if (entry.mandatory === false) continue;
+                if (seenProjects.has(`jar:${cleanDepId}`) || seenProjects.has(cleanDepId)) continue;
+                if (disabledNames.has(cleanDepId)) continue; // Will be activated by fix-mod-conflicts
+                if (reportedMissing.has(cleanDepId)) continue;
+                reportedMissing.add(cleanDepId);
+
+                const info = await searchModByDepNameCheck(depModId);
+                missing.push({ requiredBy: mod, projectId: info.projectSlug || depModId, versionId: null, projectName: info.projectName || depModId, projectSlug: info.projectSlug || depModId, fromJar: true });
+            }
+        }
+
+        if (vData) {
+            for (const dep of (vData.dependencies || [])) {
+                if (dep.dependency_type !== 'required') continue;
+                const depProject = dep.project_id;
+                const depVersion = dep.version_id;
+                const cleanKey = String(depProject || depVersion || '').toLowerCase();
+                if (isIgnoredDependency(cleanKey, loader)) continue;
+                const depInstalled = (depProject && (seenProjects.has(depProject) || seenProjects.has(depProject.toLowerCase()))) ||
+                                     (depVersion && seenVersions.has(depVersion));
+                if (depInstalled) continue;
+                if (reportedMissing.has(depProject || depVersion)) continue;
+                if (depProject) reportedMissing.add(depProject);
+
+                const info = await fetchDependencyInfo(dep);
+                missing.push({ requiredBy: mod, projectId: depProject || info.projectSlug, versionId: depVersion, projectName: info.projectName, projectSlug: info.projectSlug || depProject, fromJar: false });
+            }
+        }
+
+        if (!vData && Object.keys(jarDeps).length === 0) {
+            unchecked.push(mod);
+        }
+    }
+
+    return { conflicts, missing, unchecked };
 });
 
 // ===== GAME LAUNCH =====
@@ -1144,8 +2157,10 @@ function ensureLauncherListeners() {
     });
     launcher.on('close', (code) => { 
         const pt = gameStartTime ? Math.floor((Date.now() - gameStartTime) / 1000) : 0; 
+        if (currentGameProfile) recordPlaytimeForProfile(currentGameProfile, pt);
         gameProcess = null; 
         gameStartTime = null; 
+        currentGameProfile = null;
         updateDiscordRPC('Im Hauptmenü', 'Durchstöbert Modpacks');
         sendEvent('game-closed', 'Minecraft beendet.', { exitCode: code, playTimeSeconds: pt }); 
         stopP2P();
@@ -1224,6 +2239,7 @@ ipcMain.on('start-minecraft', async (_e, options) => {
     const settings = loadSettings();
     const profiles = loadProfiles();
     const profileCfg = profiles[options.profileName] || {};
+    currentGameProfile = options.profileName;
     const ramGB = profileCfg.ram || settings.ram || 4;
     const ramMB = ramGB * 1024;
     const profilePath = path.join(instancesDir, options.profileName);
@@ -1315,7 +2331,7 @@ ipcMain.on('start-minecraft', async (_e, options) => {
 
         gameProcess = await launcher.launch(opts);
         sendEvent('game-started', 'Spiel gestartet!', { startTime: gameStartTime });
-    } catch (error) { gameProcess = null; gameStartTime = null; sendEvent('error', `Startfehler: ${error.message}`); }
+    } catch (error) { gameProcess = null; gameStartTime = null; currentGameProfile = null; sendEvent('error', `Startfehler: ${error.message}`); }
 });
 
 ipcMain.on('stop-minecraft', () => {
@@ -1326,6 +2342,17 @@ ipcMain.on('stop-minecraft', () => {
             console.error('Fehler beim Beenden des Spiels:', e);
         }
     }
+});
+
+ipcMain.handle('get-stats', () => loadStats());
+ipcMain.handle('choose-background-image', async () => {
+    const result = await dialog.showOpenDialog(mainWindow || null, {
+        title: 'Hintergrundbild auswählen',
+        properties: ['openFile'],
+        filters: [{ name: 'Bilder', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }]
+    });
+    if (result.canceled || !result.filePaths || result.filePaths.length === 0) return null;
+    return result.filePaths[0];
 });
 
 // Feature 7: Performance Monitor
@@ -1588,4 +2615,439 @@ ipcMain.handle('get-java-info', async () => {
             resolve([{ type: 'system', version: match ? match[1] : 'Nicht gefunden', path: 'java', available: !err }]);
         });
     });
+});
+// ===== FEATURE 1: FPS Booster =====
+ipcMain.handle('get-fps-booster-mods', async (_e, { loader, mcVersion }) => {
+    let mods = [];
+    if (loader === 'fabric' || loader === 'quilt') {
+        mods = ['sodium', 'lithium', 'ferrite-core', 'entityculling', 'modernfix', 'starlight', 'krypton', 'lazydfu', 'iris'];
+    } else if (loader === 'forge' || loader === 'neoforge') {
+        mods = ['embeddium', 'modernfix', 'ferrite-core', 'entityculling', 'starlight', 'oculus'];
+    }
+    const results = [];
+    for (const slug of mods) {
+        try {
+            const data = await searchModrinth(slug, { type: 'mod', loader, version: mcVersion }, 1, 0);
+            if (data.hits && data.hits.length > 0) {
+                const hit = data.hits[0];
+                results.push({ slug: hit.slug || slug, name: hit.title, description: hit.description, source: 'modrinth' });
+            }
+        } catch (e) {}
+    }
+    return results;
+});
+
+async function installModListWithDeps(profileName, loader, mcVersion, slugList, label = 'Modpack Assistent') {
+    sendEvent('info', `Starte ${label}: Installiere ${slugList.length} Mods für ${loader} ${mcVersion}...`);
+    let installed = 0;
+    const downloadedIds = new Set();
+    for (const slug of slugList) {
+        try {
+            sendEvent('info', `${label}: Installiere ${slug}...`);
+            const versionData = await getModrinthModVersion(slug, loader, mcVersion);
+            if (versionData && versionData.url) {
+                const pid = versionData.projectId || slug;
+                if (!downloadedIds.has(pid)) {
+                    await downloadModFile({ downloadUrl: versionData.url, fileName: versionData.filename, profileName, projectId: pid, source: 'modrinth', versionId: versionData.versionId, versionNumber: versionData.versionNumber });
+                    downloadedIds.add(pid);
+                    installed++;
+                    await new Promise(r => setTimeout(r, 30));
+                }
+                if (versionData.dependencies && versionData.dependencies.length > 0) {
+                    for (const dep of versionData.dependencies) {
+                        if (dep.dependency_type === 'required' && dep.project_id && !downloadedIds.has(dep.project_id)) {
+                            try {
+                                const depVersion = await getModrinthModVersion(dep.project_id, loader, mcVersion);
+                                if (depVersion && depVersion.url) {
+                                    await downloadModFile({ downloadUrl: depVersion.url, fileName: depVersion.filename, profileName, projectId: dep.project_id, source: 'modrinth', versionId: depVersion.versionId, versionNumber: depVersion.versionNumber });
+                                    downloadedIds.add(dep.project_id);
+                                    installed++;
+                                    await new Promise(r => setTimeout(r, 30));
+                                }
+                            } catch (err) {}
+                        }
+                    }
+                }
+            }
+        } catch(e) { console.warn(`${label}: Failed to install ${slug}:`, e.message); }
+    }
+    sendEvent('success', `${label}: ${installed} Mods erfolgreich installiert!`);
+    return { success: true, count: installed };
+}
+
+ipcMain.handle('install-fps-booster', async (_e, { profileName, loader, mcVersion, slugList }) => {
+    return installModListWithDeps(profileName, loader, mcVersion, slugList, 'Mod-Installation');
+});
+
+ipcMain.handle('install-wizard-mods', async (_e, { profileName, loader, mcVersion, slugList }) => {
+    return installModListWithDeps(profileName, loader, mcVersion, slugList, 'Modpack Assistent');
+});
+
+// ===== FEATURE 2: World & Save Manager =====
+ipcMain.handle('get-worlds', async (_e, profileName) => {
+    const savesDir = path.join(instancesDir, profileName, 'saves');
+    if (!fs.existsSync(savesDir)) return [];
+    try {
+        const worlds = [];
+        const dirs = fs.readdirSync(savesDir, { withFileTypes: true });
+        for (const dir of dirs) {
+            if (dir.isDirectory()) {
+                const worldPath = path.join(savesDir, dir.name);
+                const levelDat = path.join(worldPath, 'level.dat');
+                let lastPlayed = fs.statSync(worldPath).mtime;
+                if (fs.existsSync(levelDat)) {
+                    lastPlayed = fs.statSync(levelDat).mtime;
+                }
+                const size = fs.existsSync(worldPath) ? fs.readdirSync(worldPath, { recursive: true }).reduce((acc, f) => {
+                    const p = path.join(worldPath, f);
+                    try { const s = fs.statSync(p); return acc + (s.isFile() ? s.size : 0); } catch(_) { return acc; }
+                }, 0) : 0;
+                worlds.push({ name: dir.name, folderName: dir.name, size, lastPlayed: lastPlayed.toISOString(), gameMode: 'Unknown', seed: 'Unknown' });
+            }
+        }
+        return worlds.sort((a,b) => new Date(b.lastPlayed) - new Date(a.lastPlayed));
+    } catch(e) { return []; }
+});
+
+ipcMain.handle('backup-world', async (_e, { profileName, worldName }) => {
+    try {
+        const savesDir = path.join(instancesDir, profileName, 'saves');
+        const worldPath = path.join(savesDir, worldName);
+        const backupsDir = path.join(instancesDir, profileName, 'backups');
+        if (!fs.existsSync(backupsDir)) fs.mkdirSync(backupsDir, { recursive: true });
+        if (!fs.existsSync(worldPath)) return { success: false, error: 'World not found' };
+        const backupPath = path.join(backupsDir, `${worldName}_${Date.now()}.zip`);
+        const zip = new AdmZip();
+        zip.addLocalFolder(worldPath);
+        zip.writeZip(backupPath);
+        return { success: true, backupPath };
+    } catch(e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('restore-world-backup', async (_e, { profileName, backupPath }) => {
+    try {
+        if (!fs.existsSync(backupPath)) return { success: false, error: 'Backup not found' };
+        const zip = new AdmZip(backupPath);
+        const worldName = path.basename(backupPath).replace(/_\d+\.zip$/, '');
+        const worldPath = path.join(instancesDir, profileName, 'saves', worldName);
+        if (fs.existsSync(worldPath)) fs.rmSync(worldPath, { recursive: true, force: true });
+        zip.extractAllTo(worldPath, true);
+        return { success: true };
+    } catch(e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('get-world-backups', async (_e, profileName) => {
+    const backupsDir = path.join(instancesDir, profileName, 'backups');
+    if (!fs.existsSync(backupsDir)) return [];
+    try {
+        return fs.readdirSync(backupsDir)
+            .filter(f => f.endsWith('.zip'))
+            .map(f => {
+                const fp = path.join(backupsDir, f);
+                const stat = fs.statSync(fp);
+                return { filename: f, path: fp, size: stat.size, date: stat.mtime.toISOString() };
+            });
+    } catch(e) { return []; }
+});
+
+ipcMain.handle('delete-world', async (_e, { profileName, worldName }) => {
+    try {
+        const worldPath = path.join(instancesDir, profileName, 'saves', worldName);
+        if (fs.existsSync(worldPath)) fs.rmSync(worldPath, { recursive: true, force: true });
+        return { success: true };
+    } catch(e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('duplicate-world', async (_e, { profileName, worldName }) => {
+    try {
+        const src = path.join(instancesDir, profileName, 'saves', worldName);
+        const dest = path.join(instancesDir, profileName, 'saves', `${worldName}_copy`);
+        if (fs.existsSync(src)) {
+            fs.cpSync(src, dest, { recursive: true });
+            return { success: true };
+        }
+        return { success: false, error: 'World not found' };
+    } catch(e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('auto-backup-before-launch', async (_e, profileName) => {
+    try {
+        const savesDir = path.join(instancesDir, profileName, 'saves');
+        const backupsDir = path.join(instancesDir, profileName, 'backups');
+        if (!fs.existsSync(savesDir)) return { success: true };
+        if (!fs.existsSync(backupsDir)) fs.mkdirSync(backupsDir, { recursive: true });
+        
+        const dirs = fs.readdirSync(savesDir, { withFileTypes: true });
+        for (const dir of dirs) {
+            if (dir.isDirectory()) {
+                const worldName = dir.name;
+                const worldPath = path.join(savesDir, worldName);
+                const backupPath = path.join(backupsDir, `${worldName}_auto_${Date.now()}.zip`);
+                const zip = new AdmZip();
+                zip.addLocalFolder(worldPath);
+                zip.writeZip(backupPath);
+                
+                const worldBackups = fs.readdirSync(backupsDir)
+                    .filter(f => f.startsWith(`${worldName}_auto_`) && f.endsWith('.zip'))
+                    .map(f => ({ name: f, time: fs.statSync(path.join(backupsDir, f)).mtime.getTime() }))
+                    .sort((a, b) => b.time - a.time);
+                    
+                if (worldBackups.length > 3) {
+                    for (let i = 3; i < worldBackups.length; i++) {
+                        fs.unlinkSync(path.join(backupsDir, worldBackups[i].name));
+                    }
+                }
+            }
+        }
+        return { success: true };
+    } catch(e) { return { success: false, error: e.message }; }
+});
+
+// ===== FEATURE 3: Config Editor =====
+ipcMain.handle('get-config-files', async (_e, profileName) => {
+    const configDir = path.join(instancesDir, profileName, 'config');
+    const optionsPath = path.join(instancesDir, profileName, 'options.txt');
+    const files = [];
+    if (fs.existsSync(optionsPath)) {
+        files.push({ filename: 'options.txt', path: optionsPath, size: fs.statSync(optionsPath).size, type: 'txt' });
+    }
+    if (fs.existsSync(configDir)) {
+        const readDirRec = (dir) => {
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            for (const entry of entries) {
+                const fp = path.join(dir, entry.name);
+                if (entry.isDirectory()) {
+                    readDirRec(fp);
+                } else if (/\.(toml|json|cfg|properties|yml|yaml)$/i.test(entry.name)) {
+                    files.push({ filename: path.relative(path.join(instancesDir, profileName), fp), path: fp, size: fs.statSync(fp).size, type: path.extname(entry.name).substring(1) });
+                }
+            }
+        };
+        readDirRec(configDir);
+    }
+    return files;
+});
+
+ipcMain.handle('read-config-file', async (_e, filePath) => {
+    try {
+        if (!fs.existsSync(filePath)) return '';
+        const stat = fs.statSync(filePath);
+        if (stat.size > 500 * 1024) return 'File too large (>500KB)';
+        return fs.readFileSync(filePath, 'utf8');
+    } catch(e) { return `Error: ${e.message}`; }
+});
+
+ipcMain.handle('save-config-file', async (_e, { filePath, content }) => {
+    try {
+        fs.writeFileSync(filePath, content, 'utf8');
+        return { success: true };
+    } catch(e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('read-options-txt', async (_e, profileName) => {
+    const optionsPath = path.join(instancesDir, profileName, 'options.txt');
+    if (!fs.existsSync(optionsPath)) return {};
+    try {
+        const content = fs.readFileSync(optionsPath, 'utf8');
+        const options = {};
+        for (const line of content.split('\n')) {
+            const sep = line.indexOf(':');
+            if (sep !== -1) {
+                const k = line.substring(0, sep).trim();
+                const v = line.substring(sep + 1).trim();
+                options[k] = v;
+            }
+        }
+        return options;
+    } catch(e) { return {}; }
+});
+
+ipcMain.handle('save-options-txt', async (_e, { profileName, optionsObj }) => {
+    const optionsPath = path.join(instancesDir, profileName, 'options.txt');
+    try {
+        const lines = [];
+        for (const [k, v] of Object.entries(optionsObj)) {
+            lines.push(`${k}:${v}`);
+        }
+        fs.writeFileSync(optionsPath, lines.join('\n'), 'utf8');
+        return { success: true };
+    } catch(e) { return { success: false, error: e.message }; }
+});
+
+// ===== FEATURE 4: Server-Sync =====
+ipcMain.handle('create-sync-link', async (_e, profileName) => {
+    try {
+        const profiles = loadProfiles();
+        const p = profiles[profileName];
+        if (!p) throw new Error('Profile not found');
+        const lockPath = path.join(instancesDir, profileName, 'schleimy-lock.json');
+        let mods = [];
+        if (fs.existsSync(lockPath)) {
+            const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+            mods = Object.values(lock.mods || {}).map(m => ({ slug: m.projectId, source: m.source, versionId: m.versionId, filename: m.fileName }));
+        }
+        const manifest = { loader: p.loader, version: p.version, mods };
+        return { syncCode: Buffer.from(JSON.stringify(manifest)).toString('base64') };
+    } catch(e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('apply-sync-link', async (_e, { syncCode, targetProfileName }) => {
+    try {
+        const manifest = JSON.parse(Buffer.from(syncCode, 'base64').toString('utf8'));
+        const lockPath = path.join(instancesDir, targetProfileName, 'schleimy-lock.json');
+        let currentMods = {};
+        if (fs.existsSync(lockPath)) {
+            const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+            currentMods = lock.mods || {};
+        }
+        const currentFilenames = new Set(Object.values(currentMods).map(m => m.fileName));
+        const manifestFilenames = new Set(manifest.mods.map(m => m.filename));
+        
+        let added = 0, removed = 0;
+        const targetModsDir = path.join(instancesDir, targetProfileName, 'mods');
+        if (!fs.existsSync(targetModsDir)) fs.mkdirSync(targetModsDir, { recursive: true });
+        
+        for (const fn of currentFilenames) {
+            if (!manifestFilenames.has(fn)) {
+                const fp = path.join(targetModsDir, fn);
+                if (fs.existsSync(fp)) fs.unlinkSync(fp);
+                removed++;
+            }
+        }
+        
+        for (const m of manifest.mods) {
+            if (!currentFilenames.has(m.filename)) {
+                if (m.source === 'modrinth') {
+                    try {
+                        const res = await fetch(`${MODRINTH_API}/version/${m.versionId}`);
+                        if (res.ok) {
+                            const data = await res.json();
+                            const f = data.files[0];
+                            await downloadModFile({ downloadUrl: f.url, fileName: f.filename, profileName: targetProfileName, projectId: m.slug, source: m.source, versionId: m.versionId, versionNumber: data.version_number });
+                            added++;
+                        }
+                    } catch(ex) {}
+                }
+            }
+        }
+        return { success: true, added, removed };
+    } catch(e) { return { success: false, error: e.message }; }
+});
+
+// ===== FEATURE 5: Modpack Creator Wizard =====
+ipcMain.handle('get-modpack-suggestions', async (_e, { category, loader, mcVersion, maxRam }) => {
+    try {
+        const catMap = {
+            'performance': ['optimization'],
+            'rpg': ['magic', 'adventure'],
+            'tech': ['technology', 'storage'],
+            'adventure': ['adventure', 'worldgen'],
+            'kitchensink': ['technology', 'magic', 'adventure', 'optimization', 'storage'],
+            'minimal': ['utility', 'qol']
+        };
+        const mappedCats = catMap[category] || [];
+        let hits = [];
+        if (mappedCats.length > 0) {
+            const res = await searchModrinth('', { type: 'mod', loader, version: mcVersion, category: mappedCats }, 35, 0);
+            hits = res.hits || [];
+        }
+        if (hits.length < 4) {
+            const fallbackRes = await searchModrinth('', { type: 'mod', loader, version: mcVersion, category: ['optimization', 'qol'] }, 20, 0);
+            const existingSlugs = new Set(hits.map(h => h.slug));
+            for (const h of (fallbackRes.hits || [])) {
+                if (!existingSlugs.has(h.slug)) {
+                    hits.push(h);
+                    existingSlugs.add(h.slug);
+                    if (hits.length >= 15) break;
+                }
+            }
+        }
+        return hits.map(h => ({
+            slug: h.slug,
+            name: h.title,
+            description: h.description,
+            downloads: h.downloads,
+            iconUrl: h.icon_url
+        }));
+    } catch(e) { return []; }
+});
+
+// ===== FEATURE 6: AI Mod-Doctor =====
+ipcMain.handle('auto-repair-mods', async (_e, { profileName, loader, mcVersion, issues }) => {
+    try {
+        const actions = [];
+        for (const issue of (issues || [])) {
+            if (issue.type === 'missing_dependency' && issue.depId) {
+                try {
+                    const versionData = await getModrinthModVersion(issue.depId, loader, mcVersion);
+                    if (versionData && versionData.url) {
+                        await downloadModFile({ downloadUrl: versionData.url, fileName: versionData.filename, profileName, projectId: issue.depId, source: 'modrinth', versionId: versionData.versionId, versionNumber: versionData.versionNumber });
+                        actions.push({ type: 'download', mod: versionData.filename, detail: 'Fehlende Abhängigkeit heruntergeladen' });
+                    }
+                } catch(ex) { actions.push({ type: 'error', mod: issue.depId, detail: 'Konnte Abhängigkeit nicht laden: ' + ex.message }); }
+            } else if (issue.type === 'incompatible' || issue.type === 'duplicate') {
+                const fp = path.join(instancesDir, profileName, 'mods', issue.filename);
+                if (fs.existsSync(fp)) {
+                    fs.unlinkSync(fp);
+                    actions.push({ type: 'delete', mod: issue.filename, detail: issue.type === 'incompatible' ? 'Inkompatibler Mod entfernt' : 'Doppelter Mod entfernt' });
+                }
+            }
+        }
+        return { success: true, actions };
+    } catch(e) { return { success: false, error: e.message }; }
+});
+
+// ===== FEATURE 7: GC Analysis =====
+ipcMain.handle('get-gc-analysis', async (_e, profileName) => {
+    try {
+        const logPath = path.join(instancesDir, profileName, 'logs', 'latest.log');
+        if (!fs.existsSync(logPath)) return { gcPauses: [], memoryWarnings: [], lagSpikes: 0, recommendation: 'No log found' };
+        const content = fs.readFileSync(logPath, 'utf8');
+        const lines = content.split('\n');
+        const gcPauses = [];
+        const memoryWarnings = [];
+        let lagSpikes = 0;
+        
+        for (const line of lines) {
+            if (line.includes('Server is running') && line.includes('behind')) lagSpikes++;
+            if (line.includes('OutOfMemory') || line.includes('memory usage')) memoryWarnings.push(line);
+            const gcMatch = line.match(/Pause (Young|Init Mark|Remark|Cleanup) \((.*?)\) (\d+\.\d+)ms/);
+            if (gcMatch) gcPauses.push({ timestamp: line.substring(0, 10), duration: parseFloat(gcMatch[3]) });
+        }
+        let recommendation = 'Looks good!';
+        if (lagSpikes > 5) recommendation = 'Consider adding performance mods or increasing RAM.';
+        if (memoryWarnings.length > 0) recommendation = 'You are running out of memory! Increase RAM allocation.';
+        return { gcPauses, memoryWarnings, lagSpikes, recommendation };
+    } catch(e) { return { gcPauses: [], memoryWarnings: [], lagSpikes: 0, recommendation: 'Error analyzing' }; }
+});
+
+// ===== FEATURE 8: Video & Sound =====
+ipcMain.handle('choose-video-background', async () => {
+    const result = await dialog.showOpenDialog({
+        properties: ['openFile'],
+        filters: [{ name: 'Videos', extensions: ['mp4', 'webm'] }]
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    return result.filePaths[0];
+});
+ipcMain.handle('get-sound-effects-enabled', async () => {
+    const settings = loadSettings();
+    return settings.soundEffects !== false;
+});
+ipcMain.handle('save-sound-effects-enabled', async (_e, enabled) => {
+    saveSettingsFile({ soundEffects: enabled });
+    return { success: true };
+});
+
+// ===== FEATURE 10: Controller Mod =====
+ipcMain.handle('install-controller-mod', async (_e, { profileName, loader, mcVersion }) => {
+    try {
+        const slug = (loader === 'fabric' || loader === 'quilt') ? 'midnightcontrols' : 'controllable';
+        const versionData = await getModrinthModVersion(slug, loader, mcVersion);
+        if (versionData && versionData.url) {
+            await downloadModFile({ downloadUrl: versionData.url, fileName: versionData.filename, profileName, projectId: slug, source: 'modrinth', versionId: versionData.versionId, versionNumber: versionData.versionNumber });
+            return { success: true, modName: slug };
+        }
+        return { success: false, error: `Kein kompatibles Release für ${slug} gefunden.` };
+    } catch(e) { return { success: false, error: e.message }; }
 });

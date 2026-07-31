@@ -2,9 +2,16 @@ import { showToast } from './toasts.js';
 import { openInstanceModal, closeModals } from './ui.js';
 
 let currentProfiles = {};
+let currentStats = {};
 
 export async function loadProfiles() {
     currentProfiles = await window.electronAPI.getProfiles();
+    try {
+        currentStats = await window.electronAPI.getStats();
+    } catch (e) {
+        console.warn('Unable to load stats', e);
+        currentStats = {};
+    }
     renderProfiles();
     updatePlaySelect();
     return currentProfiles;
@@ -12,6 +19,13 @@ export async function loadProfiles() {
 
 export function getProfilesData() {
     return currentProfiles;
+}
+
+function formatPlaytime(seconds) {
+    if (!seconds || seconds <= 0) return '0m gespielt';
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    return `${hours > 0 ? `${hours}h ` : ''}${minutes}m gespielt`;
 }
 
 function renderEmptyScreenshotState(message) {
@@ -132,6 +146,7 @@ function renderProfiles() {
         
         card.style.borderTop = `3px solid ${loaderColor}`;
         
+        const stat = currentStats[name] || {};
         card.innerHTML = `
             <div class="instance-card-header">
                 <div>
@@ -139,6 +154,7 @@ function renderProfiles() {
                     <div class="mod-meta">
                         <span class="badge" style="color:${loaderColor}; border-color:${loaderColor}40;">${data.loader.toUpperCase()}</span>
                         <span class="badge">${data.version}</span>
+                        <span class="badge stats-badge">${stat.playSeconds ? formatPlaytime(stat.playSeconds) : 'Noch nicht gespielt'}</span>
                     </div>
                 </div>
                 <div class="instance-actions">
@@ -207,6 +223,11 @@ let currentActiveInstance = null;
 
 async function openInstanceDetails(name) {
     currentActiveInstance = name;
+    const playSelect = document.getElementById('play-profile-select');
+    if (playSelect && playSelect.value !== name) {
+        playSelect.value = name;
+        playSelect.dispatchEvent(new Event('change'));
+    }
     const modal = document.getElementById('modal-instance');
     openInstanceModal(name);
     
@@ -235,9 +256,83 @@ async function openInstanceDetails(name) {
     await renderAddons(name, 'inst-shaders-list', 'getShaderPacks', 'toggleShaderPack', 'deleteShaderPack', 'Keine Shaders installiert.');
     await renderAddons(name, 'inst-rp-list', 'getResourcePacks', 'toggleResourcePack', 'deleteResourcePack', 'Keine Resource Packs installiert.');
     await renderScreenshots(name);
+    renderInstanceSettings(name);
 }
 
-async function renderAddons(profileName, listId, getIpc, toggleIpc, deleteIpc, emptyMsg) {
+function renderInstanceSettings(name) {
+    const profile = currentProfiles[name] || {};
+    const ramInput = document.getElementById('inst-setting-ram');
+    const ramVal = document.getElementById('inst-setting-ram-val');
+    const jvmSelect = document.getElementById('inst-setting-jvm');
+    const javaInput = document.getElementById('inst-setting-java');
+    const saveBtn = document.getElementById('btn-inst-save-settings');
+
+    if (ramInput && ramVal) {
+        const val = profile.ram || 0;
+        ramInput.value = val;
+        ramVal.textContent = val > 0 ? `${val} GB` : 'Global';
+
+        const newRamInput = ramInput.cloneNode(true);
+        ramInput.parentNode.replaceChild(newRamInput, ramInput);
+        newRamInput.addEventListener('input', () => {
+            const v = parseInt(newRamInput.value, 10);
+            ramVal.textContent = v > 0 ? `${v} GB` : 'Global';
+        });
+    }
+
+    if (jvmSelect) {
+        jvmSelect.value = profile.jvmPreset || 'default';
+    }
+    if (javaInput) {
+        javaInput.value = profile.javaPath || '';
+    }
+
+    if (saveBtn) {
+        const newSaveBtn = saveBtn.cloneNode(true);
+        saveBtn.parentNode.replaceChild(newSaveBtn, saveBtn);
+        newSaveBtn.addEventListener('click', async () => {
+            const currentRam = document.getElementById('inst-setting-ram');
+            const currentJvm = document.getElementById('inst-setting-jvm');
+            const currentJava = document.getElementById('inst-setting-java');
+
+            if (!currentProfiles[name]) return;
+            const rVal = parseInt(currentRam?.value, 10) || 0;
+            if (rVal > 0) {
+                currentProfiles[name].ram = rVal;
+            } else {
+                delete currentProfiles[name].ram;
+            }
+
+            const jVal = currentJvm?.value || 'default';
+            if (jVal !== 'default') {
+                currentProfiles[name].jvmPreset = jVal;
+            } else {
+                delete currentProfiles[name].jvmPreset;
+            }
+
+            const jPath = currentJava?.value?.trim() || '';
+            if (jPath) {
+                currentProfiles[name].javaPath = jPath;
+            } else {
+                delete currentProfiles[name].javaPath;
+            }
+
+            newSaveBtn.disabled = true;
+            newSaveBtn.textContent = 'Speichere...';
+            try {
+                await window.electronAPI.saveProfiles(currentProfiles);
+                showToast('Erfolg', `Einstellungen für ${name} gespeichert!`, 'success');
+            } catch (err) {
+                showToast('Fehler', 'Konnte Einstellungen nicht speichern', 'error');
+            } finally {
+                newSaveBtn.disabled = false;
+                newSaveBtn.textContent = 'Einstellungen speichern';
+            }
+        });
+    }
+}
+
+export async function renderAddons(profileName, listId, getIpc, toggleIpc, deleteIpc, emptyMsg) {
     const list = document.getElementById(listId);
     list.innerHTML = '<p style="padding:8px; text-align:center; color:var(--color-text-med);">Lade...</p>';
     
@@ -271,17 +366,13 @@ async function renderAddons(profileName, listId, getIpc, toggleIpc, deleteIpc, e
         `;
         
         div.querySelector('.toggle-btn').addEventListener('click', async () => {
-            const res = await window.electronAPI[toggleIpc](profileName, item.filename);
-            if (res.success) {
-                renderAddons(profileName, listId, getIpc, toggleIpc, deleteIpc, emptyMsg);
-            } else {
-                showToast('Fehler', res.error, 'error');
-            }
+            await window.electronAPI[toggleIpc]({ profileName, filename: item.filename });
+            renderAddons(profileName, listId, getIpc, toggleIpc, deleteIpc, emptyMsg);
         });
         
         div.querySelector('.del-btn').addEventListener('click', async () => {
-            if (confirm(`Wirklich löschen?`)) {
-                const res = await window.electronAPI[deleteIpc](profileName, item.filename);
+            if (confirm(`Wirklich ${item.displayName} löschen?`)) {
+                const res = await window.electronAPI[deleteIpc]({ profileName, filename: item.filename });
                 if (res.success) {
                     renderAddons(profileName, listId, getIpc, toggleIpc, deleteIpc, emptyMsg);
                 } else {
@@ -294,7 +385,9 @@ async function renderAddons(profileName, listId, getIpc, toggleIpc, deleteIpc, e
     });
 }
 
-async function renderInstalledMods(name) {
+let _updateCheckCache = {};
+
+export async function renderInstalledMods(name) {
     const list = document.getElementById('inst-mods-list');
     list.innerHTML = '<p style="padding:8px; text-align:center; color:var(--color-text-med);">Lade Mods...</p>';
     
@@ -310,7 +403,11 @@ async function renderInstalledMods(name) {
     
     let updates = [];
     if (profileData) {
-        window.electronAPI.checkModUpdates({ profileName: name, loader: profileData.loader, mcVersion: profileData.version })
+        const now = Date.now();
+        if (!_updateCheckCache[name] || (now - _updateCheckCache[name].time > 60000)) {
+            _updateCheckCache[name] = { time: now, promise: window.electronAPI.checkModUpdates({ profileName: name, loader: profileData.loader, mcVersion: profileData.version }) };
+        }
+        _updateCheckCache[name].promise
             .then(upd => {
                 updates = upd || [];
                 updates.forEach(u => {

@@ -11,74 +11,11 @@ let currentModDetailToken = 0; // For preventing race conditions in modal
 // Simple Markdown → HTML converter for Modrinth descriptions
 function markdownToHtml(md) {
     if (!md) return '';
-    let html = md.replace(/\r\n/g, '\n');
-
-    // Code blocks (```lang\n...```)
-
-    html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
-        const langClass = lang ? ` class="language-${lang}"` : '';
-        return `<pre><code${langClass}>${code.trim()}</code></pre>`;
-    });
-
-    // Inline code
-    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-
-    // Images ![alt](url)
-    html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width:100%;border-radius:8px;">');
-
-    // Links [text](url)
-    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-
-    // Bold + italic together ***text***
-    html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
-    // Bold **text**
-    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    // Italic *text*
-    html = html.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
-
-    // Strikethrough ~~text~~
-    html = html.replace(/~~(.+?)~~/g, '<del>$1</del>');
-
-    // Horizontal rules ---
-    html = html.replace(/^---\s*$/gm, '<hr>');
-
-    // Headings
-    html = html.replace(/^\s*######\s+(.+)$/gm, '<h6>$1</h6>');
-    html = html.replace(/^\s*#####\s+(.+)$/gm, '<h5>$1</h5>');
-    html = html.replace(/^\s*####\s+(.+)$/gm, '<h4>$1</h4>');
-    html = html.replace(/^\s*###\s+(.+)$/gm, '<h3>$1</h3>');
-    html = html.replace(/^\s*##\s+(.+)$/gm, '<h2>$1</h2>');
-    html = html.replace(/^\s*#\s+(.+)$/gm, '<h1>$1</h1>');
-
-    // Blockquotes
-    html = html.replace(/^> (.+)$/gm, '<blockquote><p>$1</p></blockquote>');
-
-    // Unordered list items (- or * at line start)
-    html = html.replace(/^[\s]*[-*+][\s]+(.+)$/gm, '<li>$1</li>');
-    // Ordered list items
-    html = html.replace(/^[\s]*\d+\.[\s]+(.+)$/gm, '<li>$1</li>');
-
-    // Wrap consecutive <li> in <ul> or <ol>
-    html = html.replace(/((?:<li>.*?<\/li>\n?)+)/g, '<ul>$1</ul>');
-
-    // Paragraphs (double newline = paragraph boundary)
-    html = html.replace(/\n\n/g, '</p><p>');
-    html = '<p>' + html + '</p>';
-
-    // Fix block-level elements wrongly wrapped in <p>
-    html = html.replace(/<p><(pre|ul|ol|blockquote|hr|h[1-6])/g, '<$1');
-    html = html.replace(/<\/(pre|ul|ol|blockquote|hr|h[1-6])><\/p>/g, '</$1>');
-    // Fix <p> wrapping <li> inside <ul>
-    html = html.replace(/<ul><p><li>/g, '<ul><li>');
-    html = html.replace(/<\/li><\/p><\/ul>/g, '</li></ul>');
-    html = html.replace(/<ul><p>/g, '<ul>');
-    html = html.replace(/<\/p><\/ul>/g, '</ul>');
-    // Remove empty paragraphs
-    html = html.replace(/<p><\/p>/g, '');
-
-    return html;
+    if (window.marked && typeof window.marked.parse === 'function') {
+        return window.marked.parse(md);
+    }
+    return md;
 }
-
 export function initDiscover(getProfilesData) {
     lastGetProfilesData = getProfilesData;
     const searchInput = document.getElementById('search-input');
@@ -642,11 +579,10 @@ async function handleInstallClick(slug, projectType, getProfilesData, btnElement
             });
         }
 
-        // Immediately mark as installed — download runs async in background
-        // If it fails, the error toast in app.js will inform the user.
-        // refreshInstallStates() will re-check actual files on disk when
-        // switching to the discover tab next time.
-        setAllInstallButtons(slug, btnElement, { text: 'Installiert', disabled: true });
+        // Button remains 'Lädt...' while async download is in progress.
+        // It will be changed to 'Installiert' and profile will be live-updated
+        // as soon as evt.type === 'success' arrives in app.js.
+        setAllInstallButtons(slug, btnElement, { text: 'Lädt...', disabled: true });
     } catch (e) {
         showToast('Installationsfehler', e.message, 'error');
         setAllInstallButtons(slug, btnElement, { text: 'Installieren', disabled: false });

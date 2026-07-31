@@ -1,19 +1,27 @@
 {
   "name": "schleimy-launcher",
-  "version": "5.0.0",
+  "version": "6.0.0",
   "description": "Schleimy Launcher – Ein moderner Minecraft Mod-Launcher",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "build": "electron-builder",
-    "build:win": "electron-builder --win",
-    "build:mac": "electron-builder --mac",
-    "build:linux": "electron-builder --linux"
+    "build:win": "electron-builder --win nsis",
+    "build:win:publish": "electron-builder --win nsis --publish always",
+    "build:all": "electron-builder --mac --win nsis --linux",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
   },
   "author": "Schleimy",
   "license": "MIT",
   "type": "commonjs",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Schleimy007/schleimy-launcher.git"
+  },
+  "homepage": "https://github.com/Schleimy007/schleimy-launcher",
   "dependencies": {
+    "adm-zip": "^0.4.16",
     "b4a": "^1.8.1",
     "discord-rpc": "^4.0.1",
     "dotenv": "^16.4.5",

@@ -5,3 +5,8 @@ build/
 .DS_Store
 .env
 .env.*
+AgentIDE/
+main_merged.js
+new_handlers.js
+renderer/new_features.js
+

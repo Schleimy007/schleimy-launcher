@@ -115,7 +115,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     msLoginBtn.addEventListener('click', async () => {
         msLoginBtn.disabled = true;
         document.getElementById('loginStatus').innerText = "Warte auf Login...";
+
         if (window.electronAPI) {
+            // NEU: Wenn schon eingeloggt, erstmal sauber abmelden und Cache leeren
+            if (currentAuth) {
+                await window.electronAPI.clearAuth();
+                currentAuth = null;
+                localStorage.removeItem('schleimy_session');
+            }
+
             const result = await window.electronAPI.loginMicrosoft();
             if (result.success) {
                 currentAuth = result.token;

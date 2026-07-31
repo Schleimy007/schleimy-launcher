@@ -11,7 +11,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // Window Controls
     windowMinimize: () => ipcRenderer.invoke('window-minimize'),
     windowMaximize: () => ipcRenderer.invoke('window-maximize'),
-    windowClose: () => ipcRenderer.invoke('window-close'),
+    windowClose: (shift) => ipcRenderer.invoke('window-close', shift),
 
     // Auth
     loginMicrosoft: () => ipcRenderer.invoke('login-microsoft'),
@@ -60,6 +60,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // Feature 3: Mod Conflicts
     checkModConflicts: (data) => ipcRenderer.invoke('check-mod-conflicts', data),
+    fixModConflicts: (data) => ipcRenderer.invoke('fix-mod-conflicts', data),
 
     // P2P Networking
     p2pFetchPublic: () => ipcRenderer.invoke('p2p-fetch-public'),
@@ -92,6 +93,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getScreenshots: (pn) => ipcRenderer.invoke('get-screenshots', pn),
     getScreenshotData: (fp) => ipcRenderer.invoke('get-screenshot-data', fp),
     copyScreenshot: (fp) => ipcRenderer.invoke('copy-screenshot', fp),
+    deleteScreenshot: (fp) => ipcRenderer.invoke('delete-screenshot', fp),
+    openScreenshotFolder: (fp) => ipcRenderer.invoke('open-screenshot-folder', fp),
 
     // Feature 12: Desktop Shortcut
     createShortcut: (data) => ipcRenderer.invoke('create-shortcut', data),
@@ -109,10 +112,48 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // Feature 5: Java Info
     getJavaInfo: () => ipcRenderer.invoke('get-java-info'),
 
+    // Stats & Background
+    getStats: () => ipcRenderer.invoke('get-stats'),
+    chooseBackgroundImage: () => ipcRenderer.invoke('choose-background-image'),
+
     // Events
     onLauncherEvent: (callback) => {
         const handler = (_event, data) => callback(data);
         ipcRenderer.on('launcher-event', handler);
         return () => ipcRenderer.removeListener('launcher-event', handler);
-    }
+    },
+    
+    // Feature 1
+    getFpsBoosterMods: (args) => ipcRenderer.invoke('get-fps-booster-mods', args),
+    installFpsBooster: (args) => ipcRenderer.invoke('install-fps-booster', args),
+    installWizardMods: (args) => ipcRenderer.invoke('install-wizard-mods', args),
+    // Feature 2
+    getWorlds: (args) => ipcRenderer.invoke('get-worlds', args),
+    backupWorld: (args) => ipcRenderer.invoke('backup-world', args),
+    restoreWorldBackup: (args) => ipcRenderer.invoke('restore-world-backup', args),
+    getWorldBackups: (args) => ipcRenderer.invoke('get-world-backups', args),
+    deleteWorld: (args) => ipcRenderer.invoke('delete-world', args),
+    duplicateWorld: (args) => ipcRenderer.invoke('duplicate-world', args),
+    autoBackupBeforeLaunch: (args) => ipcRenderer.invoke('auto-backup-before-launch', args),
+    // Feature 3
+    getConfigFiles: (args) => ipcRenderer.invoke('get-config-files', args),
+    readConfigFile: (args) => ipcRenderer.invoke('read-config-file', args),
+    saveConfigFile: (args) => ipcRenderer.invoke('save-config-file', args),
+    readOptionsTxt: (args) => ipcRenderer.invoke('read-options-txt', args),
+    saveOptionsTxt: (args) => ipcRenderer.invoke('save-options-txt', args),
+    // Feature 4
+    createSyncLink: (args) => ipcRenderer.invoke('create-sync-link', args),
+    applySyncLink: (args) => ipcRenderer.invoke('apply-sync-link', args),
+    // Feature 5
+    getModpackSuggestions: (args) => ipcRenderer.invoke('get-modpack-suggestions', args),
+    // Feature 6
+    autoRepairMods: (args) => ipcRenderer.invoke('auto-repair-mods', args),
+    // Feature 7
+    getGcAnalysis: (args) => ipcRenderer.invoke('get-gc-analysis', args),
+    // Feature 8
+    chooseVideoBackground: () => ipcRenderer.invoke('choose-video-background'),
+    getSoundEffectsEnabled: () => ipcRenderer.invoke('get-sound-effects-enabled'),
+    saveSoundEffectsEnabled: (args) => ipcRenderer.invoke('save-sound-effects-enabled', args),
+    // Feature 10
+    installControllerMod: (args) => ipcRenderer.invoke('install-controller-mod', args)
 });

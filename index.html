@@ -63,6 +63,10 @@
                     <svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
                     Community
                 </div>
+                <div class="nav-item" data-tab="wizard">
+                    <svg viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    Assistent
+                </div>
                 <div class="nav-item" data-tab="screenshots">
                     <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" ry="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/><path d="M21 15l-5-5L5 21" stroke="currentColor" stroke-width="2"/></svg>
                     Galerie
@@ -131,6 +135,16 @@
                     <div class="select-wrapper">
 <select class="select" id="filter-version">
                         <option value="">Alle Versionen</option>
+                        <option value="1.21.1">1.21.1</option>
+                        <option value="1.20.4">1.20.4</option>
+                        <option value="1.20.1">1.20.1</option>
+                        <option value="1.19.4">1.19.4</option>
+                        <option value="1.19.2">1.19.2</option>
+                        <option value="1.18.2">1.18.2</option>
+                        <option value="1.17.1">1.17.1</option>
+                        <option value="1.16.5">1.16.5</option>
+                        <option value="1.12.2">1.12.2</option>
+                        <option value="1.8.9">1.8.9</option>
                     </select>
 <svg class="select-arrow" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
 </div>
@@ -158,6 +172,90 @@
                 </div>
                 <div id="discover-grid" class="grid"></div>
                 <div id="discover-pagination" style="display:flex; justify-content:center; gap:8px; margin-top:24px;"></div>
+            </div>
+
+            <!-- Tab: Wizard -->
+            <div id="tab-wizard" class="tab-container">
+                <h1>Modpack Assistent</h1>
+                <div id="wizard-step-indicator" style="display: flex; gap: 8px; margin-bottom: 24px;">
+                    <div class="step-dot" id="wiz-dot-1" style="width: 12px; height: 12px; border-radius: 50%; background: var(--color-brand);"></div>
+                    <div class="step-dot" id="wiz-dot-2" style="width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--color-brand);"></div>
+                    <div class="step-dot" id="wiz-dot-3" style="width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--color-brand);"></div>
+                    <div class="step-dot" id="wiz-dot-4" style="width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--color-brand);"></div>
+                    <div class="step-dot" id="wiz-dot-5" style="width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--color-brand);"></div>
+                </div>
+                
+                <div id="wizard-step-1" class="wizard-step">
+                    <h2>Kategorie wählen</h2>
+                    <div class="grid" id="wizard-categories">
+                        <div class="card wizard-cat" data-cat="performance" style="cursor: pointer;"><h3>Performance</h3><p>Max FPS, weniger Lags.</p></div>
+                        <div class="card wizard-cat" data-cat="rpg" style="cursor: pointer;"><h3>RPG & Magie</h3><p>Quests, Magie, neue Bosse.</p></div>
+                        <div class="card wizard-cat" data-cat="tech" style="cursor: pointer;"><h3>Tech & Industrie</h3><p>Maschinen, Automatisierung.</p></div>
+                        <div class="card wizard-cat" data-cat="adventure" style="cursor: pointer;"><h3>Abenteuer</h3><p>Neue Welten, Dungeons.</p></div>
+                        <div class="card wizard-cat" data-cat="kitchensink" style="cursor: pointer;"><h3>Kitchen Sink</h3><p>Von allem etwas!</p></div>
+                        <div class="card wizard-cat" data-cat="minimal" style="cursor: pointer;"><h3>Minimal</h3><p>Vanilla+, kleine Tweaks.</p></div>
+                    </div>
+                </div>
+
+                <div id="wizard-step-2" class="wizard-step" style="display: none;">
+                    <h2>Loader & Version</h2>
+                    <div class="form-group">
+                        <label class="form-label">Loader</label>
+                        <div class="select-wrapper">
+                            <select class="select" id="wizard-loader">
+                                <option value="fabric">Fabric</option>
+                                <option value="forge">Forge</option>
+                                <option value="neoforge">NeoForge</option>
+                                <option value="quilt">Quilt</option>
+                            </select>
+                            <svg class="select-arrow" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
+                        </div>
+                    </div>
+                    <div class="form-group" style="margin-top: 16px;">
+                        <label class="form-label">Version</label>
+                        <div class="select-wrapper">
+                            <select class="select" id="wizard-version">
+                                <option value="1.21.1">1.21.1</option>
+                                <option value="1.20.4">1.20.4</option>
+                                <option value="1.20.1" selected>1.20.1</option>
+                                <option value="1.19.4">1.19.4</option>
+                                <option value="1.19.2">1.19.2</option>
+                                <option value="1.18.2">1.18.2</option>
+                                <option value="1.17.1">1.17.1</option>
+                                <option value="1.16.5">1.16.5</option>
+                                <option value="1.12.2">1.12.2</option>
+                                <option value="1.8.9">1.8.9</option>
+                            </select>
+                            <svg class="select-arrow" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="wizard-step-3" class="wizard-step" style="display: none;">
+                    <h2>Arbeitsspeicher (RAM)</h2>
+                    <div style="display: flex; align-items: center; gap: 16px;">
+                        <input type="range" id="wizard-ram" min="2" max="32" step="1" value="4">
+                        <span id="wizard-ram-val" style="font-family: var(--font-mono); font-weight:600; width: 60px;">4 GB</span>
+                    </div>
+                </div>
+
+                <div id="wizard-step-4" class="wizard-step" style="display: none;">
+                    <h2>Mod-Vorschläge</h2>
+                    <div id="wizard-mods-list" style="display:flex; flex-direction:column; gap:8px;"></div>
+                </div>
+
+                <div id="wizard-step-5" class="wizard-step" style="display: none;">
+                    <h2>Zusammenfassung & Erstellen</h2>
+                    <div class="form-group">
+                        <label class="form-label">Profilname</label>
+                        <input type="text" class="input" id="wizard-name" placeholder="Mein cooles Modpack" style="width: 100%;">
+                    </div>
+                </div>
+
+                <div style="display:flex; justify-content:space-between; margin-top:24px;">
+                    <button class="btn btn-secondary" id="btn-wizard-back" style="visibility: hidden;">Zurück</button>
+                    <button class="btn btn-primary" id="btn-wizard-next">Weiter</button>
+                </div>
             </div>
 
             <!-- Tab: Settings -->
@@ -221,12 +319,26 @@
                     <hr style="border:0; border-top:1px solid var(--color-border); margin: 24px 0;">
 
                     <div class="form-group">
+                        <label class="form-label">Launcher Hintergrund</label>
+                        <div id="background-preview" style="min-height: 150px; border-radius: 18px; border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.03); display:flex; align-items:center; justify-content:center; color:var(--color-text-med); text-align:center; padding: 16px; background-size: cover; background-position: center;">Kein Bild ausgewählt</div>
+                        <div style="display:flex; gap: 12px; flex-wrap:wrap; margin-top: 12px;">
+                            <button class="btn btn-secondary" id="btn-choose-background">Bild auswählen</button>
+                            <button class="btn btn-secondary" id="btn-choose-video-bg">Video auswählen</button>
+                            <button class="btn btn-secondary" id="btn-clear-background">Zurücksetzen</button>
+                        </div>
+                        <p style="font-size: 13px; margin-top: 8px; color: var(--color-text-med);">Lokales Bild oder Video wird gespeichert und beim nächsten Start geladen.</p>
+                    </div>
+
+                    <hr style="border:0; border-top:1px solid var(--color-border); margin: 24px 0;">
+
+                    <div class="form-group">
                         <label class="form-label">Erweiterte Funktionen</label>
                         <div style="display: flex; flex-direction: column; gap: 8px;">
                             <label><input type="checkbox" id="setting-preload"> Ultra-Fast Parallel Asset Pre-loader</label>
                             <label><input type="checkbox" id="setting-discord"> Discord Rich Presence Integration</label>
                             <label><input type="checkbox" id="setting-cloud"> Cloud-Profil- & Spielstand-Sync (Ordner-Verknüpfung)</label>
                             <label><input type="checkbox" id="setting-portable"> Portabler USB-Modus & Offline-Start</label>
+                            <label><input type="checkbox" id="setting-sound-effects"> UI-Sounds aktivieren</label>
                         </div>
                         <div id="cloud-sync-ui" style="display: none; margin-top: 12px; padding: 12px; background: var(--color-bg-input); border-radius: var(--radius-md);">
                             <label style="font-size: 13px; display: block; margin-bottom: 6px;">Cloud-Sync Ziel-Ordner (z.B. Google Drive Ordner)</label>
@@ -249,10 +361,10 @@
                         <button class="btn btn-primary" id="btn-community-join">Beitreten</button>
                     </div>
                 </div>
-                <div class="card" style="margin-bottom: 24px; padding: 16px; background: rgba(27, 217, 106, 0.1); border: 1px solid rgba(27, 217, 106, 0.3);">
-                    <h3 style="margin-bottom: 8px; color: var(--color-primary);">P2P Multiplayer - So funktioniert's!</h3>
-                    <p style="color: var(--color-text-med); font-size: 14px; margin-bottom: 0;">
-                        Hoste deine Welt kostenlos direkt aus dem Spiel! Aktiviere beim Erstellen eines Profils den "Host-Modus" (Öffentlich oder Privat). Starte das Spiel, öffne deine Singleplayer-Welt im LAN, und deine Welt erscheint hier in der Liste.
+                <div class="card card-compact" style="margin-bottom: 24px; background: rgba(27, 217, 106, 0.1); border: 1px solid rgba(27, 217, 106, 0.3);">
+                    <h3 style="color: var(--color-primary);">P2P Multiplayer - So funktioniert's!</h3>
+                    <p style="color: var(--color-text-med); margin-bottom: 0;">
+                        Hoste deine Welt direkt aus dem Spiel. Aktiviere beim Profil den "Host-Modus", öffne deine Singleplayer-Welt im LAN und deine Welt erscheint hier in der Liste.
                     </p>
                 </div>
 
@@ -335,7 +447,16 @@
                     <label class="form-label">Version</label>
                     <div class="select-wrapper">
 <select class="select" id="create-version" style="width:100%;">
-                        <option value="">Lade...</option>
+                        <option value="1.21.1">1.21.1</option>
+                        <option value="1.20.4">1.20.4</option>
+                        <option value="1.20.1" selected>1.20.1</option>
+                        <option value="1.19.4">1.19.4</option>
+                        <option value="1.19.2">1.19.2</option>
+                        <option value="1.18.2">1.18.2</option>
+                        <option value="1.17.1">1.17.1</option>
+                        <option value="1.16.5">1.16.5</option>
+                        <option value="1.12.2">1.12.2</option>
+                        <option value="1.8.9">1.8.9</option>
                     </select>
 <svg class="select-arrow" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
 </div>
@@ -387,6 +508,10 @@
                 <button class="btn btn-secondary" id="btn-inst-conflicts">Konflikte prüfen</button>
                 <button class="btn btn-secondary" id="btn-inst-shortcut">Desktop Shortcut</button>
                 <button class="btn btn-secondary" id="btn-inst-share">World-Share</button>
+                <button class="btn btn-secondary" id="btn-inst-fps-boost">FPS-Booster</button>
+                <button class="btn btn-secondary" id="btn-inst-sync">Sync-Link</button>
+                <button class="btn btn-secondary" id="btn-inst-controller">Controller-Mod</button>
+                <button class="btn btn-secondary" id="btn-inst-diagnostics">Radar (Lag/Leak)</button>
                 <button class="btn btn-secondary" id="btn-inst-crash">Crash-Log-KI</button>
                 <button class="btn btn-secondary" id="btn-inst-logs">Log Viewer</button>
                 <button class="btn btn-danger" id="btn-inst-delete" style="margin-left:auto;">Löschen</button>
@@ -396,12 +521,67 @@
                 <div class="tab-header" data-target="inst-shaders-list">Shaders</div>
                 <div class="tab-header" data-target="inst-rp-list">Resource Packs</div>
                 <div class="tab-header" data-target="inst-gallery-list">Screenshots</div>
+                <div class="tab-header" data-target="inst-worlds-list">Welten</div>
+                <div class="tab-header" data-target="inst-configs-list">Configs</div>
+                <div class="tab-header" data-target="inst-settings-list">Einstellungen</div>
             </div>
-            <div class="modal-tab-content-wrapper">
+            <div class="modal-tab-content-wrapper" style="overflow-x: hidden; width: 100%; box-sizing: border-box;">
                 <div id="inst-mods-list" class="addon-list" style="display: flex;"></div>
                 <div id="inst-shaders-list" class="addon-list" style="display: none;"></div>
                 <div id="inst-rp-list" class="addon-list" style="display: none;"></div>
                 <div id="inst-gallery-list" class="addon-list" style="display: none;"></div>
+                <div id="inst-worlds-list" class="addon-list" style="display: none; padding: 12px 4px; overflow-y: auto;">
+                    <div id="inst-worlds-container" style="display:flex; flex-direction:column; gap:8px; margin-bottom: 24px;"></div>
+                    <h3>Backups</h3>
+                    <div id="inst-backups-container" style="display:flex; flex-direction:column; gap:8px;"></div>
+                </div>
+                <div id="inst-configs-list" class="addon-list" style="display: none; height: 100%;">
+                    <div style="display: flex; gap: 16px; height: 100%;">
+                        <div style="width: 200px; border-right: 1px solid var(--color-border); overflow-y: auto; display: flex; flex-direction: column; gap: 4px;" id="config-file-tree">
+                        </div>
+                        <div style="flex: 1; display: flex; flex-direction: column;">
+                            <div id="config-options-editor" style="display: none; overflow-y: auto; height: 100%;">
+                                <!-- Key-Value editor for options.txt -->
+                            </div>
+                            <textarea id="config-text-editor" style="flex: 1; width: 100%; font-family: var(--font-mono); background: var(--color-bg-input); color: var(--color-text-high); border: 1px solid var(--color-border); padding: 8px; border-radius: var(--radius-md); display: none;"></textarea>
+                            <div style="display: flex; justify-content: flex-end; margin-top: 8px;">
+                                <button class="btn btn-primary" id="btn-config-save" style="display: none;">Speichern</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div id="inst-settings-list" class="addon-list" style="display: none; padding: 12px 4px; overflow-y: auto; overflow-x: hidden; width: 100%; box-sizing: border-box;">
+                    <div class="form-group" style="width: 100%; box-sizing: border-box;">
+                        <label class="form-label">Arbeitsspeicher (RAM) für diese Instanz</label>
+                        <div style="display: flex; align-items: center; gap: 16px; width: 100%; max-width: 100%; box-sizing: border-box;">
+                            <input type="range" id="inst-setting-ram" min="0" max="32" step="1" value="0" style="flex: 1 1 0%; min-width: 0; width: 100%; max-width: 100%; box-sizing: border-box;">
+                            <span id="inst-setting-ram-val" style="font-family: var(--font-mono); font-weight: 600; min-width: 70px; text-align: right; white-space: nowrap;">Global</span>
+                        </div>
+                        <p style="font-size: 13px; color: var(--color-text-med); margin-top: 6px;">Wähle den RAM für dieses Profil (0 = Globale Einstellung aus den Einstellungen nutzen).</p>
+                    </div>
+                    <div class="form-group" style="width: 100%; box-sizing: border-box;">
+                        <label class="form-label">JVM Performance Preset</label>
+                        <div class="select-wrapper full-width" style="max-width: 100%; width: 100%;">
+                            <select class="select" id="inst-setting-jvm">
+                                <option value="default">Standard / Global</option>
+                                <option value="zgc">ZGC (Niedrige Latenz)</option>
+                                <option value="shenandoah">Shenandoah (Gleichmäßige GC)</option>
+                                <option value="ferrite">Ferrite Core Optimiert</option>
+                            </select>
+                            <svg class="select-arrow" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
+                        </div>
+                    </div>
+                    <div class="form-group" style="width: 100%; box-sizing: border-box;">
+                        <label class="form-label">Eigener Java-Pfad (optional)</label>
+                        <input type="text" class="input" id="inst-setting-java" placeholder="z.B. C:\Program Files\Java\jdk-21\bin\java.exe" style="width: 100%; box-sizing: border-box;">
+                    </div>
+                    <div class="form-group" style="width: 100%; box-sizing: border-box;">
+                        <label class="form-label"><input type="checkbox" id="inst-setting-autobackup"> Auto-Backup vor Spielstart</label>
+                    </div>
+                    <div style="display: flex; justify-content: flex-end; margin-top: 16px;">
+                        <button class="btn btn-primary" id="btn-inst-save-settings">Einstellungen speichern</button>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -492,6 +672,181 @@
 
     <div id="toast-container"></div>
 
+    <!-- Modal: Server Sync -->
+    <div id="modal-sync" class="modal-overlay">
+        <div class="modal-content" style="max-width: 500px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 20px;">
+                <h2>Server-Sync</h2>
+                <button class="btn btn-icon btn-secondary" id="btn-sync-close">
+                    <svg viewBox="0 0 24 24" style="width:18px;height:18px;"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                </button>
+            </div>
+            
+            <div style="display:flex; gap:16px; margin-bottom:24px;">
+                <button class="btn btn-primary" id="btn-sync-mode-create" style="flex:1;">Link erstellen</button>
+                <button class="btn btn-secondary" id="btn-sync-mode-apply" style="flex:1;">Link anwenden</button>
+            </div>
+
+            <div id="sync-create-view">
+                <p style="color:var(--color-text-med); margin-bottom:16px;">Erstelle einen Code, um diese Instanz auf einem anderen PC zu synchronisieren.</p>
+                <button class="btn btn-primary" id="btn-sync-generate" style="width:100%; margin-bottom:16px;">Sync-Link generieren</button>
+                <textarea class="input" id="sync-code-output" readonly rows="3" style="width:100%; resize:none; font-family:var(--font-mono);"></textarea>
+            </div>
+
+            <div id="sync-apply-view" style="display: none;">
+                <p style="color:var(--color-text-med); margin-bottom:16px;">Füge den Sync-Code ein, um das Profil zu aktualisieren/erstellen.</p>
+                <textarea class="input" id="sync-code-input" placeholder="Sync-Code hier einfügen..." rows="3" style="width:100%; resize:none; font-family:var(--font-mono); margin-bottom:16px;"></textarea>
+                <button class="btn btn-primary" id="btn-sync-apply" style="width:100%;">Sync anwenden</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: AI Mod-Doctor (Crash Detail) -->
+    <div id="modal-crash-detail" class="modal-overlay">
+        <div class="modal-content" style="max-width: 700px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 20px;">
+                <h2>AI Mod-Doctor Befund</h2>
+                <button class="btn btn-icon btn-secondary" id="btn-crash-close">
+                    <svg viewBox="0 0 24 24" style="width:18px;height:18px;"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                </button>
+            </div>
+            <div class="card" style="border-color: var(--color-danger); background: rgba(240, 102, 102, 0.1);">
+                <h3 style="color: var(--color-danger);">Ursache</h3>
+                <p id="crash-cause" style="color: var(--color-text-high);"></p>
+            </div>
+            <div class="card" style="margin-top: 16px; border-color: var(--color-brand); background: rgba(29, 212, 167, 0.1);">
+                <h3 style="color: var(--color-brand);">Lösungsvorschlag</h3>
+                <p id="crash-solution" style="color: var(--color-text-high);"></p>
+            </div>
+            <div style="margin-top: 16px;">
+                <h3>Involvierte Mods</h3>
+                <ul id="crash-mods-list" style="margin-left: 20px; color: var(--color-text-med);"></ul>
+            </div>
+            <div style="margin-top: 24px; display: flex; gap: 16px;">
+                <button class="btn btn-primary" id="btn-crash-autorepair" style="flex:1;">Automatisch reparieren</button>
+                <button class="btn btn-secondary" id="btn-crash-logtoggle">Raw Log anzeigen</button>
+            </div>
+            <textarea id="crash-raw-log" class="input" readonly style="width: 100%; height: 150px; margin-top: 16px; display: none; font-family: var(--font-mono); font-size: 12px;"></textarea>
+        </div>
+    </div>
+
+    <!-- Modal: Live Log Viewer (Feature 18) -->
+    <div id="modal-log-viewer" class="modal-overlay">
+        <div class="modal-content" style="max-width: 780px; width: 90%;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 16px;">
+                <h2>Live Log-Viewer (Farbcodiert & Gefiltert)</h2>
+                <button class="btn btn-icon btn-secondary" id="btn-log-close">
+                    <svg viewBox="0 0 24 24" style="width:18px;height:18px;"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                </button>
+            </div>
+            <div style="margin-bottom: 12px; display: flex; gap: 8px;">
+                <input type="text" id="log-filter-input" class="input" placeholder="Filter nach Keyword (z.B. ERROR, WARN, Mixin, NullPointer)..." style="flex:1; font-family: var(--font-mono); font-size: 13px;">
+                <button id="btn-log-refresh" class="btn btn-secondary">Aktualisieren</button>
+                <button id="btn-log-copy" class="btn btn-secondary">Kopieren</button>
+            </div>
+            <div id="log-viewer-content" style="background: rgba(0,0,0,0.55); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 12px; height: 380px; overflow-y: auto; font-family: var(--font-mono); font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-all;">
+                <p style="color: var(--color-text-med);">Lade Logs...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: World-Share Host (Feature 13) -->
+    <div id="modal-share" class="modal-overlay">
+        <div class="modal-content" style="max-width: 520px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 16px;">
+                <h2>World-Share Host (P2P & e4mc Tunnel)</h2>
+                <button class="btn btn-icon btn-secondary" id="btn-share-close">
+                    <svg viewBox="0 0 24 24" style="width:18px;height:18px;"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                </button>
+            </div>
+            <p style="color: var(--color-text-med); margin-bottom: 16px; font-size: 14px;">
+                Teile deine Singleplayer-Welt sofort mit Freunden via e4mc/UPnP – keine Router-Portfreigabe oder VPN erforderlich!
+            </p>
+            <div id="share-status-card" class="card card-compact" style="margin-bottom: 16px; border-left: 4px solid var(--color-border);">
+                <div style="font-weight: 600; color: var(--color-text-high);" id="share-status-title">Status: Offline</div>
+                <div style="font-size: 12px; color: var(--color-text-med);" id="share-status-desc">Starte die Sitzung, um einen öffentlichen Einladungs-Link zu generieren.</div>
+            </div>
+            <div class="form-group" style="margin-bottom: 20px;">
+                <label class="form-label">Dein Einladungs-Link / Adresse:</label>
+                <div style="display: flex; gap: 8px;">
+                    <input type="text" id="share-link-input" class="input" readonly value="schleimy.e4mc.link:25565" style="flex:1; font-family: var(--font-mono); font-size: 13px;">
+                    <button id="btn-share-copy" class="btn btn-secondary">Kopieren</button>
+                </div>
+            </div>
+            <div style="display: flex; gap: 12px; justify-content: flex-end;">
+                <button id="btn-share-toggle" class="btn btn-primary" style="flex:1;">Host-Sitzung starten</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Cloud-Sync Manager (Feature 14) -->
+    <div id="modal-cloud-sync" class="modal-overlay">
+        <div class="modal-content" style="max-width: 560px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 16px;">
+                <h2>Cloud-Profil- & Spielstand-Sync</h2>
+                <button class="btn btn-icon btn-secondary" id="btn-cloud-close">
+                    <svg viewBox="0 0 24 24" style="width:18px;height:18px;"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                </button>
+            </div>
+            <p style="color: var(--color-text-med); margin-bottom: 16px; font-size: 14px;">
+                Synchronisiere Welten, Optionen und Mods automatisch mit deinem Cloud-Speicher.
+            </p>
+            <div class="form-group" style="margin-bottom: 16px;">
+                <label class="form-label">Cloud-Anbieter:</label>
+                <select id="cloud-provider-select" class="select" style="width:100%;">
+                    <option value="gdrive">Google Drive (Desktop Verknüpfung)</option>
+                    <option value="onedrive">Microsoft OneDrive</option>
+                    <option value="s3">Amazon S3 / Nextcloud / WebDAV</option>
+                </select>
+            </div>
+            <div class="card card-compact" style="margin-bottom: 20px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <span style="font-size: 13px; color: var(--color-text-med);">Zuletzt synchronisiert:</span>
+                    <span id="cloud-last-sync-time" style="font-size: 13px; font-weight:600; color:var(--color-text-high);">Noch nie</span>
+                </div>
+            </div>
+            <div style="display: flex; gap: 12px;">
+                <button id="btn-cloud-push" class="btn btn-primary" style="flex:1;">Jetzt in Cloud sichern (Push)</button>
+                <button id="btn-cloud-pull" class="btn btn-secondary" style="flex:1;">Aus Cloud laden (Pull)</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Diagnostics Radar -->
+    <div id="modal-diagnostics" class="modal-overlay">
+        <div class="modal-content" style="max-width: 600px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 20px;">
+                <h2>Lag-Spike & Memory-Leak Radar</h2>
+                <button class="btn btn-icon btn-secondary" id="btn-diagnostics-close">
+                    <svg viewBox="0 0 24 24" style="width:18px;height:18px;"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                </button>
+            </div>
+            
+            <div style="margin-bottom: 20px;">
+                <h3>GC Pauses (Timeline)</h3>
+                <div id="diag-gc-timeline" style="display:flex; gap:2px; height: 40px; background: rgba(0,0,0,0.3); padding: 4px; border-radius: var(--radius-md); align-items: flex-end;">
+                    <!-- bars will be injected here -->
+                </div>
+            </div>
+
+            <div style="display: flex; gap: 16px; margin-bottom: 20px;">
+                <div class="card" style="flex:1;">
+                    <h3 style="font-size: 16px; color: var(--color-text-med);">Memory Warnings</h3>
+                    <div id="diag-memory-warnings" style="font-size: 24px; font-weight: bold; color: var(--color-success);">0</div>
+                </div>
+                <div class="card" style="flex:1;">
+                    <h3 style="font-size: 16px; color: var(--color-text-med);">Lag Spikes</h3>
+                    <div id="diag-lag-spikes" style="font-size: 24px; font-weight: bold; color: var(--color-success);">0</div>
+                </div>
+            </div>
+
+            <div class="card" id="diag-recommendation-card">
+                <h3>Empfehlung</h3>
+                <p id="diag-recommendation-text" style="color: var(--color-text-med);">Alles sieht gut aus!</p>
+            </div>
+        </div>
+    </div>
+
     <script>
         (function() {
             var t = setTimeout(function() {
@@ -505,6 +860,7 @@
             window.__loaderFailsafe = t;
         })();
     </script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script type="module" src="renderer/app.js"></script>
     <script type="module" src="renderer/features.js"></script>
 </body>
